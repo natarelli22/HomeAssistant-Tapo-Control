@@ -1239,11 +1239,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
             if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
                 if enableMediaSync and entry.entry_id in hass.data.get(DOMAIN, {}):
+                    device["runningMediaSync"] = True
+                    if "coordinator" in device:
+                        await device["coordinator"].async_request_refresh()
                     try:
                         await mediaCleanup(hass, entry, device)
                     except Exception as err:
                         LOGGER.error("Error during Tapo Care media cleanup: %s", err)
-                device["runningMediaSync"] = False
+                    finally:
+                        device["runningMediaSync"] = False
+                        if "coordinator" in device:
+                            await device["coordinator"].async_request_refresh()
+                else:
+                    device["runningMediaSync"] = False
                 return
 
             mediaSyncHours = entry.data.get(MEDIA_SYNC_HOURS)

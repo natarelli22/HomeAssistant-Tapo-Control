@@ -1,5 +1,6 @@
 """Tapo camera sensors."""
 
+import os
 import re
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
@@ -15,7 +16,16 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, ENABLE_MEDIA_SYNC, LOGGER
+from .const import (
+    DOMAIN,
+    ENABLE_MEDIA_SYNC,
+    LOGGER,
+    MEDIA_SYNC_COLD_STORAGE_PATH,
+    MEDIA_SYNC_HOURS,
+    RECORDINGS_SOURCE,
+    RECORDINGS_SOURCE_SD,
+    RECORDINGS_SOURCE_TAPO_CARE,
+)
 from .tapo.entities import TapoSensorEntity
 
 
@@ -77,7 +87,11 @@ async def async_setup_entry(
                 LOGGER.debug("Adding TapoLastRebootTimeSensor...")
                 sensors.append(TapoLastRebootTimeSensor(entry, hass, config_entry))
 
-        if entry["controller"].isKLAP is False:
+        sync_source = config_entry.data.get(
+            RECORDINGS_SOURCE,
+            config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        if entry["controller"].isKLAP is False or sync_source == RECORDINGS_SOURCE_TAPO_CARE:
             sensors.append(TapoSyncSensor(entry, hass, config_entry))
 
         return sensors
@@ -335,7 +349,7 @@ class TapoSyncSensor(TapoSensorEntity):
             entry,
             hass,
             config_entry,
-            None,
+            "mdi:sync",
             None,
         )
 
@@ -345,37 +359,96 @@ class TapoSyncSensor(TapoSensorEntity):
 
     def updateTapo(self, camData: dict | None) -> None:
         """Update the entity."""
-        enable_media_sync = self._hass.data[DOMAIN][self._config_entry.entry_id][
-            ENABLE_MEDIA_SYNC
-        ]
-        runningMediaSync = self._hass.data[DOMAIN][self._config_entry.entry_id][
-            "runningMediaSync"
-        ]
-        LOGGER.debug("Enable Media Sync: %s", enable_media_sync)
-        if enable_media_sync or runningMediaSync is True:
-            data = self._hass.data[DOMAIN][self._config_entry.entry_id]
-            LOGGER.debug("Initial Media Scan: %s", data["initialMediaScanDone"])
-            LOGGER.debug("Media Sync Available: %s", data["mediaSyncAvailable"])
-            LOGGER.debug("Download Progress: %s", data["downloadProgress"])
-            LOGGER.debug("Running media sync: %s", data["runningMediaSync"])
-            LOGGER.debug("Media Sync Schedueled: %s", data["mediaSyncScheduled"])
-            LOGGER.debug("Media Sync Ran Once: %s", data["mediaSyncRanOnce"])
+        data = self._hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id, {})
+        if not data:
+            return
 
-            if not data["initialMediaScanDone"] or (
-                data["initialMediaScanDone"] and not data["mediaSyncRanOnce"]
+        enable_media_sync = data.get(ENABLE_MEDIA_SYNC, False)
+        runningMediaSync = data.get("runningMediaSync", False)
+
+        sync_source = self._config_entry.data.get(
+            RECORDINGS_SOURCE,
+            self._config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+
+        LOGGER.debug("Enable Media Sync: %s", enable_media_sync)
+        LOGGER.debug("Running media sync: %s", runningMediaSync)
+        LOGGER.debug("Sync Source: %s", sync_source)
+
+        if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
+            cold_storage_path = self._config_entry.data.get(MEDIA_SYNC_COLD_STORAGE_PATH)
+            storage_exists = bool(
+                cold_storage_path
+                and os.path.exists(cold_storage_path)
+                and os.path.isdir(cold_storage_path)
+            )
+
+            if not enable_media_sync:
+                self._attr_native_value = "Tapo Care - Disabled"
+                self._attr_icon = "mdi:cloud-off-outline"
+            elif not storage_exists:
+                self._attr_native_value = "Tapo Care - Storage Not Found"
+                self._attr_icon = "mdi:cloud-alert"
+            elif runningMediaSync:
+                self._attr_native_value = "Tapo Care - Cleaning"
+                self._attr_icon = "mdi:cloud-sync"
+            else:
+                self._attr_native_value = "Tapo Care - Idle"
+                self._attr_icon = "mdi:cloud-check"
+
+            attributes = {
+                "storage_mode": RECORDINGS_SOURCE_TAPO_CARE,
+                "sync_enabled": bool(enable_media_sync),
+                "cold_storage_path": cold_storage_path,
+                "cold_storage_found": storage_exists,
+            }
+            media_sync_hours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
+            if media_sync_hours:
+                attributes["retention_hours"] = media_sync_hours
+            last_cleanup = data.get("lastMediaCleanup")
+            if last_cleanup:
+                attributes["last_cleanup"] = (
+                    dt_util.utc_from_timestamp(last_cleanup).isoformat()
+                )
+            self._attr_extra_state_attributes = attributes
+            return
+
+        LOGGER.debug("Initial Media Scan: %s", data.get("initialMediaScanDone"))
+        LOGGER.debug("Media Sync Available: %s", data.get("mediaSyncAvailable"))
+        LOGGER.debug("Download Progress: %s", data.get("downloadProgress"))
+        LOGGER.debug("Running media sync: %s", data.get("runningMediaSync"))
+        LOGGER.debug("Media Sync Schedueled: %s", data.get("mediaSyncScheduled"))
+        LOGGER.debug("Media Sync Ran Once: %s", data.get("mediaSyncRanOnce"))
+
+        if enable_media_sync or runningMediaSync is True:
+            if not data.get("initialMediaScanDone") or (
+                data.get("initialMediaScanDone") and not data.get("mediaSyncRanOnce")
             ):
                 self._attr_native_value = "Starting"
-            elif not data["mediaSyncAvailable"]:
+                self._attr_icon = "mdi:sync"
+            elif not data.get("mediaSyncAvailable"):
                 self._attr_native_value = "No Recordings Found"
-            elif data["downloadProgress"]:
+                self._attr_icon = "mdi:sd"
+            elif data.get("downloadProgress"):
                 if data["downloadProgress"] == "Finished download":
                     self._attr_native_value = "Idle"
+                    self._attr_icon = "mdi:sd"
                 else:
                     self._attr_native_value = data["downloadProgress"]
+                    self._attr_icon = "mdi:sync"
             else:
                 self._attr_native_value = "Idle"
+                self._attr_icon = "mdi:sd"
         else:
             self._attr_native_value = "Idle"
+            self._attr_icon = "mdi:sd"
+
+        self._attr_extra_state_attributes = {
+            "storage_mode": RECORDINGS_SOURCE_SD,
+            "sync_enabled": bool(enable_media_sync),
+            "media_sync_available": data.get("mediaSyncAvailable", True),
+            "download_progress": data.get("downloadProgress"),
+        }
 
 
 class TapoLastRebootTimeSensor(TapoSensorEntity):
