@@ -63,6 +63,7 @@ from .utils import (
     getColdDirPathForEntry,
     getHotDirPathForEntry,
     getDataPath,
+    format_date_ha,
 )
 
 
@@ -703,31 +704,7 @@ class TapoMediaSource(MediaSource):
 
     def _format_date_title(self, date_str: str) -> str:
         """Format a date string (YYYY-MM-DD) according to the Home Assistant language/locale."""
-        m = re.match(r"^(\d{4})[-_](\d{2})[-_](\d{2})$", date_str)
-        if not m:
-            return date_str
-
-        year, month, day = m.group(1), m.group(2), m.group(3)
-        lang = getattr(getattr(self.hass, "config", None), "language", "en") or "en"
-        lang = lang.lower()
-
-        try:
-            import babel.dates
-            from datetime import date as dt_date
-            d_obj = dt_date(int(year), int(month), int(day))
-            locale_str = lang.replace("-", "_")
-            return babel.dates.format_date(d_obj, format="short", locale=locale_str)
-        except Exception:
-            pass
-
-        if lang.startswith(("pt", "es", "fr", "it", "nl")) or lang == "en-gb":
-            return f"{day}/{month}/{year}"
-        elif lang.startswith("de"):
-            return f"{day}.{month}.{year}"
-        elif lang in ("en", "en-us"):
-            return f"{month}/{day}/{year}"
-        else:
-            return date_str
+        return format_date_ha(self.hass, date_str)
 
     def _browse_camera_dates(
         self, camera: str, camera_path: Path | None, query: dict[str, str]

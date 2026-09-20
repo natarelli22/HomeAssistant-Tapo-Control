@@ -646,6 +646,76 @@ async def deleteColdFilesOlderThanMaxSyncTime(
     return 0, []
 
 
+def format_date_ha(hass, date_str: str) -> str:
+    """Format a date string (YYYY-MM-DD or YYYY_MM_DD) according to the Home Assistant language/locale."""
+    m = re.match(r"^(\d{4})[-_](\d{2})[-_](\d{2})", date_str)
+    if not m:
+        return date_str
+
+    year, month, day = m.group(1), m.group(2), m.group(3)
+    lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
+    lang = lang.lower()
+
+    try:
+        import babel.dates
+        from datetime import date as dt_date
+
+        d_obj = dt_date(int(year), int(month), int(day))
+        locale_str = lang.replace("-", "_")
+        return babel.dates.format_date(d_obj, format="short", locale=locale_str)
+    except Exception:
+        pass
+
+    if lang.startswith(("pt", "es", "fr", "it", "nl")) or lang == "en-gb":
+        return f"{day}/{month}/{year}"
+    elif lang.startswith("de"):
+        return f"{day}.{month}.{year}"
+    elif lang in ("en", "en-us"):
+        return f"{month}/{day}/{year}"
+    else:
+        return f"{day}/{month}/{year}"
+
+
+def format_cleanup_summary(
+    hass, sync_source: str, unique_recordings: list[str]
+) -> str:
+    """Format cleanup summary grouped by date in Home Assistant locale date format."""
+    lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
+    lang = lang.lower()
+    is_pt = lang.startswith("pt")
+
+    date_counts = {}
+    for rec in unique_recordings:
+        m = re.match(r"^(\d{4})[-_](\d{2})[-_](\d{2})", rec)
+        if m:
+            d_key = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+            date_counts[d_key] = date_counts.get(d_key, 0) + 1
+        else:
+            date_counts["other"] = date_counts.get("other", 0) + 1
+
+    parts = []
+    for d_key in sorted(date_counts.keys()):
+        count = date_counts[d_key]
+        if d_key == "other":
+            unit = (
+                ("gravação" if count == 1 else "gravações")
+                if is_pt
+                else ("recording" if count == 1 else "recordings")
+            )
+            parts.append(f"{count} {unit}")
+        else:
+            fmt_d = format_date_ha(hass, d_key)
+            unit = (
+                ("evento" if count == 1 else "eventos")
+                if is_pt
+                else ("event" if count == 1 else "events")
+            )
+            parts.append(f"{fmt_d} ({count} {unit})")
+
+    prefix = f"{sync_source} - Cleaned"
+    return f"{prefix}: {', '.join(parts)}"
+
+
 async def mediaCleanup(hass, entry, deviceData):
     entry_id = entry.entry_id
 
@@ -733,23 +803,19 @@ async def mediaCleanup(hass, entry, deviceData):
         deviceData["lastDeletedRecordings"] = unique_recordings
 
         if total_deleted > 0:
-            rec_count = len(unique_recordings)
-            rec_summary = ", ".join(unique_recordings[:3])
-            if rec_count > 3:
-                rec_summary += f" (+{rec_count - 3} mais)"
-            deviceData["lastCleanupResult"] = (
-                f"{total_deleted} files removed ({rec_count} recording(s): {rec_summary})"
+            cleanup_summary = format_cleanup_summary(
+                hass, sync_source, unique_recordings
             )
+            deviceData["lastCleanupResult"] = cleanup_summary
             LOGGER.debug(
-                "[%s Cleanup - %s] Finished cleanup: %d expired file(s) removed (%d recording(s): %s).",
+                "[%s Cleanup - %s] Finished cleanup: %d expired file(s) removed. %s",
                 sync_source,
                 device_name,
                 total_deleted,
-                rec_count,
-                rec_summary,
+                cleanup_summary,
             )
         else:
-            deviceData["lastCleanupResult"] = "No expired files to remove"
+            deviceData["lastCleanupResult"] = f"{sync_source} - Cleaned: No expired files"
             LOGGER.debug(
                 "[%s Cleanup - %s] Finished cleanup: no expired recordings to remove.",
                 sync_source,
@@ -767,18 +833,12 @@ async def mediaCleanup(hass, entry, deviceData):
         if total_deleted > 0 and sync_sensor_entity_id:
             if hass.services.has_service("logbook", "log"):
                 try:
-                    log_recordings_summary = ", ".join(unique_recordings[:5])
-                    if len(unique_recordings) > 5:
-                        log_recordings_summary += f" e mais {len(unique_recordings) - 5}..."
                     await hass.services.async_call(
                         "logbook",
                         "log",
                         {
                             "name": device_name,
-                            "message": (
-                                f"Limpeza concluída: {total_deleted} arquivo(s) expirado(s) removido(s) "
-                                f"({len(unique_recordings)} gravação(ões): {log_recordings_summary})"
-                            ),
+                            "message": cleanup_summary,
                             "entity_id": sync_sensor_entity_id,
                             "domain": DOMAIN,
                         },
