@@ -2214,7 +2214,7 @@ async def setupEvents(hass, config_entry):
             LOGGER.debug("Events started.")
             if not hass.data[DOMAIN][config_entry.entry_id]["motionSensorCreated"]:
                 hass.data[DOMAIN][config_entry.entry_id]["motionSensorCreated"] = True
-                if hass.data[DOMAIN][config_entry.entry_id]["eventsListener"]:
+                if hass.data[DOMAIN][config_entry.entry_id].get("eventsListener"):
                     hass.data[DOMAIN][config_entry.entry_id][
                         "eventsListener"
                     ].createBinarySensor()
@@ -2223,8 +2223,13 @@ async def setupEvents(hass, config_entry):
                         "Trying to create motion sensor but motion listener not set up!"
                     )
 
+                if hass.data[DOMAIN][config_entry.entry_id].get("eventsEntityListener"):
+                    hass.data[DOMAIN][config_entry.entry_id][
+                        "eventsEntityListener"
+                    ].createEventEntities()
+
                 LOGGER.debug(
-                    "Binary sensor creation for motion has been forwarded to component."
+                    "Binary sensor and event creation for motion has been forwarded to component."
                 )
             return True
         else:

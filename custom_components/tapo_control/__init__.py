@@ -490,6 +490,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.debug("Unloading tapo_control...")
     platforms = [
         "binary_sensor",
+        "event",
         "sensor",
         "button",
         "camera",
@@ -1044,6 +1045,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             "eventsSetup": False,
             "events": False,
             "eventsListener": False,
+            "eventsEntityListener": False,
             "entities": [],
             "noiseSensorStarted": False,
             "name": camData["basic_info"]["device_alias"],
@@ -1188,6 +1190,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     "siren",
                     "update",
                     "binary_sensor",
+                    "event",
                     "sensor",
                 ],
             )
