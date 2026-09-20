@@ -411,6 +411,9 @@ class TapoSyncSensor(TapoSensorEntity):
                     dt_util.utc_from_timestamp(last_cleanup).isoformat()
                 )
             attributes["last_deleted_count"] = data.get("lastDeletedCount", 0)
+            attributes["last_deleted_recordings"] = data.get(
+                "lastDeletedRecordings", []
+            )
             attributes["last_cleanup_result"] = data.get(
                 "lastCleanupResult", "No cleanup performed yet"
             )
@@ -462,6 +465,7 @@ class TapoSyncSensor(TapoSensorEntity):
                 dt_util.utc_from_timestamp(last_cleanup).isoformat()
             )
         attributes["last_deleted_count"] = data.get("lastDeletedCount", 0)
+        attributes["last_deleted_recordings"] = data.get("lastDeletedRecordings", [])
         attributes["last_cleanup_result"] = data.get(
             "lastCleanupResult", "No cleanup performed yet"
         )
