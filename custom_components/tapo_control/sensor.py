@@ -416,16 +416,10 @@ class TapoSyncSensor(TapoSensorEntity):
                     target_today = local_now.replace(
                         hour=ch, minute=cm, second=0, microsecond=0
                     )
-                    last_cleanup = data.get("lastMediaCleanup")
-                    last_cleanup_date = None
-                    if last_cleanup:
-                        last_cleanup_date = dt_util.as_local(
-                            dt_util.utc_from_timestamp(last_cleanup)
-                        ).date()
-                    if last_cleanup_date == local_now.date():
-                        next_run = target_today + datetime.timedelta(days=1)
-                    else:
+                    if local_now < target_today:
                         next_run = target_today
+                    else:
+                        next_run = target_today + datetime.timedelta(days=1)
                     attributes["next_cleanup"] = next_run.isoformat()
                 except Exception:
                     pass
