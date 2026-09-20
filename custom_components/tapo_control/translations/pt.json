@@ -119,5 +119,18 @@
       "cold_storage_path_required": "O caminho do cold storage é obrigatório ao usar o Tapo Care",
       "incorrect_peak_value": "Valor de pico de deteção de som incorreto."
     }
+  },
+  "entity": {
+    "event": {
+      "motion": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "motion": "Detectado"
+            }
+          }
+        }
+      }
+    }
   }
 }

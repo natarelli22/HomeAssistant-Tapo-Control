@@ -76,6 +76,7 @@ class TapoMotionEvent(EventEntity):
 
         self._attr_device_class = EventDeviceClass.MOTION
         self._attr_event_types = ["motion"]
+        self._attr_translation_key = "motion"
         self._attr_entity_category = event.entity_category if event else None
         self._attr_entity_registry_enabled_default = event.entity_enabled if event else True
         self._attr_name = f"{self._name} {event.name}" if event else f"{self._name} Motion"
@@ -94,6 +95,10 @@ class TapoMotionEvent(EventEntity):
     @property
     def event_types(self) -> list[str]:
         return self._attr_event_types
+
+    @property
+    def translation_key(self) -> Optional[str]:
+        return self._attr_translation_key
 
     @property
     def unique_id(self) -> str:

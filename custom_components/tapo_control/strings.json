@@ -193,5 +193,18 @@
       "incorrect_peak_value": "Incorrect sound detection peak value.",
       "incorrect_options_action": "Incorrect action chosen"
     }
+  },
+  "entity": {
+    "event": {
+      "motion": {
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "motion": "Detected"
+            }
+          }
+        }
+      }
+    }
   }
 }
