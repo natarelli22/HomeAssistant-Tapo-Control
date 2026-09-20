@@ -45,6 +45,7 @@ from .const import (
     MEDIA_CLEANUP_PERIOD,
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
+    TAPO_CARE_CLEANUP_TIME,
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
@@ -959,23 +960,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         "updateEntity"
                     ].async_schedule_update_ha_state(True)
 
-            if (
-                ts - hass.data[DOMAIN][entry.entry_id]["lastMediaCleanup"]
-                > MEDIA_CLEANUP_PERIOD
-            ):
-                LOGGER.debug(
-                    "Initiating media cleanup for "
-                    + hass.data[DOMAIN][entry.entry_id]["name"]
-                    + "..."
-                )
-                await mediaCleanup(hass, entry, hass.data[DOMAIN][entry.entry_id])
-            if hass.data[DOMAIN][entry.entry_id]["isParent"]:
-                for child in hass.data[DOMAIN][entry.entry_id]["childDevices"]:
-                    if ts - child["lastMediaCleanup"] > MEDIA_CLEANUP_PERIOD:
-                        LOGGER.debug(
-                            "Initiating media cleanup for " + child["name"] + "..."
-                        )
-                        await mediaCleanup(hass, entry, child)
+            sync_source = entry.data.get(
+                RECORDINGS_SOURCE,
+                entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+            )
+            if sync_source == RECORDINGS_SOURCE_SD:
+                if (
+                    ts - hass.data[DOMAIN][entry.entry_id]["lastMediaCleanup"]
+                    > MEDIA_CLEANUP_PERIOD
+                ):
+                    LOGGER.debug(
+                        "Initiating media cleanup for "
+                        + hass.data[DOMAIN][entry.entry_id]["name"]
+                        + "..."
+                    )
+                    await mediaCleanup(hass, entry, hass.data[DOMAIN][entry.entry_id])
+                if hass.data[DOMAIN][entry.entry_id]["isParent"]:
+                    for child in hass.data[DOMAIN][entry.entry_id]["childDevices"]:
+                        if ts - child["lastMediaCleanup"] > MEDIA_CLEANUP_PERIOD:
+                            LOGGER.debug(
+                                "Initiating media cleanup for " + child["name"] + "..."
+                            )
+                            await mediaCleanup(hass, entry, child)
 
             if hass.is_running:
                 await scheduleAll(
@@ -1238,9 +1244,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             )
 
             if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
-                # In Tapo Care mode, recordings are handled externally by tapo-care-backup.
-                # Media cleanup is performed periodically by the coordinator.
-                device["runningMediaSync"] = False
+                if device.get("runningMediaSync", False):
+                    LOGGER.debug(
+                        "Tapo Care media cleanup is already running for %s, skipping",
+                        device.get("name"),
+                    )
+                    return
+
+                cleanup_time_str = entry.data.get(TAPO_CARE_CLEANUP_TIME, "")
+                if not cleanup_time_str:
+                    device["runningMediaSync"] = False
+                    return
+
+                try:
+                    target_hour, target_minute = map(int, cleanup_time_str.split(":"))
+                except Exception:
+                    device["runningMediaSync"] = False
+                    return
+
+                local_now = dt_util.now()
+                target_today = local_now.replace(
+                    hour=target_hour, minute=target_minute, second=0, microsecond=0
+                )
+
+                last_cleanup_ts = device.get("lastMediaCleanup", 0)
+                last_cleanup_date = None
+                if last_cleanup_ts:
+                    try:
+                        last_cleanup_date = dt_util.as_local(
+                            dt_util.utc_from_timestamp(last_cleanup_ts)
+                        ).date()
+                    except Exception:
+                        last_cleanup_date = None
+
+                should_run = False
+                if local_now >= target_today:
+                    if last_cleanup_date is None or last_cleanup_date < local_now.date():
+                        should_run = True
+
+                if (
+                    enableMediaSync
+                    and entry.entry_id in hass.data.get(DOMAIN, {})
+                    and should_run
+                ):
+                    try:
+                        await mediaCleanup(hass, entry, device)
+                    except Exception as err:
+                        LOGGER.error("Error during Tapo Care media cleanup: %s", err)
+                else:
+                    device["runningMediaSync"] = False
                 return
 
             mediaSyncHours = entry.data.get(MEDIA_SYNC_HOURS)

@@ -96,9 +96,10 @@
           "media_view_days_order": "Ordem dos dias no Navegador de Mídia",
           "media_view_recordings_order": "Ordem das gravações no Navegador de Mídia",
           "media_sync_hours": "Número de horas a manter sincronizadas",
+          "tapo_care_cleanup_time": "Horário diário para execução da limpeza (HH:MM)",
           "media_sync_cold_storage_path": "Caminho do cold storage"
         },
-        "description": "Modificar definições de sincronização de gravações da cópia de segurança do Tapo Care.\n\nO caminho do cold storage é obrigatório (pasta onde os vídeos da cloud estão guardados)."
+        "description": "Modificar definições de sincronização de gravações da cópia de segurança do Tapo Care.\n\nO caminho do cold storage e o horário da limpeza diária (HH:MM) são obrigatórios."
       },
       "media_no_sd": {
         "title": "Cartão SD Não Encontrado",
@@ -117,6 +118,8 @@
       "camera_requires_admin": "A sua câmara necessita de uma palavra-passe de cloud para controlo",
       "cold_storage_path_does_not_exist": "O caminho do cold storage não existe",
       "cold_storage_path_required": "O caminho do cold storage é obrigatório ao usar o Tapo Care",
+      "cleanup_time_required": "O horário da limpeza diária é obrigatório (HH:MM, ex: 01:00)",
+      "invalid_cleanup_time": "Formato de horário inválido para limpeza. Use HH:MM (ex: 01:00).",
       "incorrect_peak_value": "Valor de pico de deteção de som incorreto."
     }
   },

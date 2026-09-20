@@ -57,6 +57,7 @@ TIME_SYNC_NDST_DEFAULT = 0
 MEDIA_VIEW_DAYS_ORDER = "media_view_days_order"
 MEDIA_VIEW_RECORDINGS_ORDER = "media_view_recordings_order"
 MEDIA_SYNC_HOURS = "media_sync_hours"
+TAPO_CARE_CLEANUP_TIME = "tapo_care_cleanup_time"
 MEDIA_SYNC_COLD_STORAGE_PATH = "media_sync_cold_storage_path"
 RECORDINGS_SOURCE = "recordings_source"
 RECORDINGS_SOURCE_SD = "SD Card"

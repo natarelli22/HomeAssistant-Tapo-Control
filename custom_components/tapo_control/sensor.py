@@ -1,5 +1,6 @@
 """Tapo camera sensors."""
 
+import datetime
 import os
 import re
 
@@ -22,6 +23,7 @@ from .const import (
     LOGGER,
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
+    TAPO_CARE_CLEANUP_TIME,
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
@@ -405,6 +407,28 @@ class TapoSyncSensor(TapoSensorEntity):
             media_sync_hours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
             if media_sync_hours:
                 attributes["retention_hours"] = media_sync_hours
+            cleanup_time = self._config_entry.data.get(TAPO_CARE_CLEANUP_TIME)
+            if cleanup_time:
+                attributes["cleanup_time"] = cleanup_time
+                try:
+                    ch, cm = map(int, cleanup_time.split(":"))
+                    local_now = dt_util.now()
+                    target_today = local_now.replace(
+                        hour=ch, minute=cm, second=0, microsecond=0
+                    )
+                    last_cleanup = data.get("lastMediaCleanup")
+                    last_cleanup_date = None
+                    if last_cleanup:
+                        last_cleanup_date = dt_util.as_local(
+                            dt_util.utc_from_timestamp(last_cleanup)
+                        ).date()
+                    if last_cleanup_date == local_now.date():
+                        next_run = target_today + datetime.timedelta(days=1)
+                    else:
+                        next_run = target_today
+                    attributes["next_cleanup"] = next_run.isoformat()
+                except Exception:
+                    pass
             last_cleanup = data.get("lastMediaCleanup")
             if last_cleanup:
                 attributes["last_cleanup"] = (

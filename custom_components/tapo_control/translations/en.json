@@ -133,9 +133,10 @@
           "media_view_days_order": "Order of days in Media Browser",
           "media_view_recordings_order": "Order of recordings in Media Browser",
           "media_sync_hours": "Number of hours to keep synchronized",
+          "tapo_care_cleanup_time": "Time of day to run cleanup (HH:MM)",
           "media_sync_cold_storage_path": "Cold storage path"
         },
-        "description": "Modify settings of recordings media synchronization from Tapo Care backup.\n\nCold storage path is required (folder where cloud videos are stored)."
+        "description": "Modify settings of recordings media synchronization from Tapo Care backup.\n\nCold storage path and daily cleanup time (HH:MM) are required."
       },
       "media_no_sd": {
         "title": "SD Card Not Found",
@@ -189,6 +190,8 @@
       "invalid_auth_cloud": "Invalid cloud password.\nMake sure you are entering the password for your cloud account and NOT the password which you created via the camera settings (unless they are the same).\nYou need to enter password which you used with your email when signing into the Tapo app.\n\nEnsure you have Third-Party compatibility turned on in Tapo App (Me -> Tapo Lab -> Third-Party Compatibility - On).",
       "cold_storage_path_does_not_exist": "Cold storage path does not exist",
       "cold_storage_path_required": "Cold storage path is required when using Tapo Care",
+      "cleanup_time_required": "Daily cleanup time is required (HH:MM, e.g. 01:00)",
+      "invalid_cleanup_time": "Invalid time format for cleanup. Please use HH:MM (e.g. 01:00).",
       "camera_requires_admin": "Camera requires cloud password for control",
       "incorrect_peak_value": "Incorrect sound detection peak value.",
       "incorrect_options_action": "Incorrect action chosen"

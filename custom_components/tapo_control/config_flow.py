@@ -42,6 +42,7 @@ from .const import (
     ENABLE_TIME_SYNC,
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
+    TAPO_CARE_CLEANUP_TIME,
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
@@ -1682,6 +1683,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
             MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
         )
         media_sync_hours = self.config_entry.data.get(MEDIA_SYNC_HOURS, "")
+        tapo_care_cleanup_time = self.config_entry.data.get(
+            TAPO_CARE_CLEANUP_TIME, ""
+        )
 
         if self._tapo_care_temp_input:
             suggested_cold_path = self._tapo_care_temp_input.get(
@@ -1696,6 +1700,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
             media_sync_hours = self._tapo_care_temp_input.get(
                 MEDIA_SYNC_HOURS, media_sync_hours
             )
+            tapo_care_cleanup_time = self._tapo_care_temp_input.get(
+                TAPO_CARE_CLEANUP_TIME, tapo_care_cleanup_time
+            )
             self._tapo_care_temp_input = None
 
         if user_input is not None:
@@ -1705,39 +1712,65 @@ class TapoOptionsFlowHandler(OptionsFlow):
             else:
                 submitted_cold_path = submitted_cold_path.strip()
 
-            if not submitted_cold_path or not os.path.exists(submitted_cold_path):
-                self._tapo_care_temp_input = user_input
-                return await self.async_step_media_tapo_care_error()
+            raw_cleanup_time = user_input.get(TAPO_CARE_CLEANUP_TIME, "")
+            if raw_cleanup_time is None:
+                raw_cleanup_time = ""
+            else:
+                raw_cleanup_time = str(raw_cleanup_time).strip()
 
-            try:
-                allConfigData = {**self.config_entry.data}
-                allConfigData.pop("media_sync_source", None)
-                allConfigData[RECORDINGS_SOURCE] = RECORDINGS_SOURCE_TAPO_CARE
-                allConfigData[MEDIA_VIEW_DAYS_ORDER] = user_input.get(
-                    MEDIA_VIEW_DAYS_ORDER, "Ascending"
+            formatted_cleanup_time = ""
+            if not raw_cleanup_time:
+                errors[TAPO_CARE_CLEANUP_TIME] = "cleanup_time_required"
+            else:
+                time_match = re.match(
+                    r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$", raw_cleanup_time
                 )
-                allConfigData[MEDIA_VIEW_RECORDINGS_ORDER] = user_input.get(
-                    MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
-                )
-                allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
-                allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
+                if not time_match:
+                    errors[TAPO_CARE_CLEANUP_TIME] = "invalid_cleanup_time"
+                else:
+                    formatted_cleanup_time = (
+                        f"{int(time_match.group(1)):02d}:{int(time_match.group(2)):02d}"
+                    )
 
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    data=allConfigData,
-                )
-                return self.async_create_entry(title="", data=None)
-            except Exception as e:
-                errors["base"] = "unknown"
-                LOGGER.error(e)
-                suggested_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
-                media_view_days_order = user_input.get(
-                    MEDIA_VIEW_DAYS_ORDER, media_view_days_order
-                )
-                media_view_recordings_order = user_input.get(
-                    MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
-                )
-                media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
+            if not errors:
+                if not submitted_cold_path or not os.path.exists(submitted_cold_path):
+                    self._tapo_care_temp_input = user_input
+                    return await self.async_step_media_tapo_care_error()
+
+                try:
+                    allConfigData = {**self.config_entry.data}
+                    allConfigData.pop("media_sync_source", None)
+                    allConfigData[RECORDINGS_SOURCE] = RECORDINGS_SOURCE_TAPO_CARE
+                    allConfigData[MEDIA_VIEW_DAYS_ORDER] = user_input.get(
+                        MEDIA_VIEW_DAYS_ORDER, "Ascending"
+                    )
+                    allConfigData[MEDIA_VIEW_RECORDINGS_ORDER] = user_input.get(
+                        MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
+                    )
+                    allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
+                    allConfigData[TAPO_CARE_CLEANUP_TIME] = formatted_cleanup_time
+                    allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
+
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry,
+                        data=allConfigData,
+                    )
+                    return self.async_create_entry(title="", data=None)
+                except Exception as e:
+                    errors["base"] = "unknown"
+                    LOGGER.error(e)
+
+            suggested_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+            media_view_days_order = user_input.get(
+                MEDIA_VIEW_DAYS_ORDER, media_view_days_order
+            )
+            media_view_recordings_order = user_input.get(
+                MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
+            )
+            media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
+            tapo_care_cleanup_time = user_input.get(
+                TAPO_CARE_CLEANUP_TIME, tapo_care_cleanup_time
+            )
 
         return self.async_show_form(
             step_id="media_tapo_care",
@@ -1755,6 +1788,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         MEDIA_SYNC_HOURS,
                         description={"suggested_value": media_sync_hours},
                     ): int,
+                    vol.Optional(
+                        TAPO_CARE_CLEANUP_TIME,
+                        description={"suggested_value": tapo_care_cleanup_time},
+                    ): str,
                     vol.Optional(
                         MEDIA_SYNC_COLD_STORAGE_PATH,
                         description={"suggested_value": suggested_cold_path},
