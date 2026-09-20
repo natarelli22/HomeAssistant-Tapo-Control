@@ -450,12 +450,25 @@ async def deleteColdFilesOlderThanMaxSyncTime(
         ts = datetime.datetime.utcnow().timestamp()
         folder_path = os.path.join(coldDirPath, folder)
 
+        sync_source = entry.data.get(
+            RECORDINGS_SOURCE,
+            entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+
         def _sync_delete_cold_files():
-            if not os.path.exists(folder_path):
-                return
+            scan_path = folder_path
+            if not os.path.exists(scan_path):
+                if (
+                    sync_source == RECORDINGS_SOURCE_TAPO_CARE
+                    and folder == "videos"
+                    and os.path.exists(coldDirPath)
+                ):
+                    scan_path = coldDirPath
+                else:
+                    return
             subdirs_to_check = []
             downloaded_streams = entryData.get("downloadedStreams", {})
-            for root, dirs, files in os.walk(folder_path):
+            for root, dirs, files in os.walk(scan_path):
                 for f in files:
                     if not f.endswith(extension):
                         continue
@@ -502,6 +515,20 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                                 file_end_ts = int(dt_file.timestamp())
                             except Exception:
                                 file_end_ts = None
+                        elif sync_source == RECORDINGS_SOURCE_TAPO_CARE:
+                            # Fallback: check if parent directory is a date folder (e.g. YYYY-MM-DD)
+                            folder_date_match = re.search(
+                                r"(\d{4})[-_](\d{2})[-_](\d{2})", os.path.basename(root)
+                            )
+                            if folder_date_match:
+                                try:
+                                    y, mo, d = map(int, folder_date_match.groups())
+                                    dt_file = datetime.datetime(
+                                        y, mo, d, 23, 59, 59, tzinfo=datetime.timezone.utc
+                                    )
+                                    file_end_ts = int(dt_file.timestamp())
+                                except Exception:
+                                    file_end_ts = None
 
                     # 3. Fallback to file st_mtime
                     try:
@@ -510,14 +537,25 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                         continue
 
                     is_older = False
-                    if file_end_ts is not None:
-                        if (
-                            file_end_ts < (int(ts) - (int(mediaSyncTime) + timeCorrection))
-                        ) and (ts - last_modified > int(mediaSyncTime)):
-                            is_older = True
+                    cutoff = int(ts) - (int(mediaSyncTime) + timeCorrection)
+                    if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
+                        # In Tapo Care mode, retention is determined strictly by the recording timestamp
+                        if file_end_ts is not None:
+                            if file_end_ts < cutoff:
+                                is_older = True
+                        else:
+                            if ts - last_modified > int(mediaSyncTime):
+                                is_older = True
                     else:
-                        if ts - last_modified > int(mediaSyncTime):
-                            is_older = True
+                        # In SD Card mode, preserve original behavior
+                        if file_end_ts is not None:
+                            if (file_end_ts < cutoff) and (
+                                ts - last_modified > int(mediaSyncTime)
+                            ):
+                                is_older = True
+                        else:
+                            if ts - last_modified > int(mediaSyncTime):
+                                is_older = True
 
                     if is_older:
                         LOGGER.debug(
@@ -532,13 +570,18 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                         except OSError as err:
                             LOGGER.debug("Error removing %s: %s", filePath, err)
 
-                if root != folder_path:
+                if root != scan_path and root != coldDirPath:
                     subdirs_to_check.append(root)
 
             # Remove empty date subdirectories
             for sdir in sorted(subdirs_to_check, reverse=True):
                 try:
-                    if os.path.isdir(sdir) and not os.listdir(sdir):
+                    if (
+                        sdir != scan_path
+                        and sdir != coldDirPath
+                        and os.path.isdir(sdir)
+                        and not os.listdir(sdir)
+                    ):
                         os.rmdir(sdir)
                         LOGGER.debug(
                             "[deleteColdFilesOlderThanMaxSyncTime] Removed empty directory %s",
