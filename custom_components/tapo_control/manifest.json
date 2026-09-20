@@ -7,7 +7,8 @@
     "@JurajNyiri",
     "@natarelli22"
   ],
-  "version": "2026.09.20-0346",
+  "version": "2026.9.20.0",
+  "iot_class": "local_polling",
   "requirements": [
     "pytapo==3.4.19",
     "python-kasa[speedups]==0.10.2"
@@ -19,7 +20,6 @@
     "network"
   ],
   "config_flow": true,
-  "homeassistant": "2026.9.0",
   "dhcp": [
     {
       "hostname": "c[0-9][0-9][0-9]*_*"

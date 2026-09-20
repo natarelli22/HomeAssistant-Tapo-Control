@@ -119,8 +119,8 @@ jobs:
         if: steps.should_run.outputs.run == 'true'
         id: get_release_info
         run: |
-          DATE_TAG="v$(date +'%Y.%m.%d-%H%M')"
-          RAW_VERSION="$(date +'%Y.%m.%d-%H%M')"
+          DATE_TAG="v$(date +'%Y.%-m.%-d.%-H%M')"
+          RAW_VERSION="$(date +'%Y.%-m.%-d.%-H%M')"
           echo "tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
           echo "version=$RAW_VERSION" >> "$GITHUB_OUTPUT"
           DELIMITER="EOF_$(date +%s)"

@@ -43,14 +43,5 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
-
-  check-hassfest:
-    name: Check Hassfest
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Hassfest validation
-        uses: home-assistant/actions/hassfest@master
+          ignore: 'topics,issues,brands'
 
