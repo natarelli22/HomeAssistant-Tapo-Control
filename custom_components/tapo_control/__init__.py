@@ -959,9 +959,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         "updateEntity"
                     ].async_schedule_update_ha_state(True)
 
+            sync_source = entry.data.get(
+                RECORDINGS_SOURCE,
+                entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+            )
+            is_tapo_care = sync_source == RECORDINGS_SOURCE_TAPO_CARE
+            cleanup_period = (
+                hass.data[DOMAIN][entry.entry_id].get("media_cleanup_period_hours", 24)
+                * 3600
+                if is_tapo_care
+                else MEDIA_CLEANUP_PERIOD
+            )
             if (
                 ts - hass.data[DOMAIN][entry.entry_id]["lastMediaCleanup"]
-                > MEDIA_CLEANUP_PERIOD
+                > cleanup_period
             ):
                 LOGGER.debug(
                     "Initiating media cleanup for "
@@ -971,7 +982,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 await mediaCleanup(hass, entry, hass.data[DOMAIN][entry.entry_id])
             if hass.data[DOMAIN][entry.entry_id]["isParent"]:
                 for child in hass.data[DOMAIN][entry.entry_id]["childDevices"]:
-                    if ts - child["lastMediaCleanup"] > MEDIA_CLEANUP_PERIOD:
+                    child_cleanup_period = (
+                        child.get("media_cleanup_period_hours", 24) * 3600
+                        if is_tapo_care
+                        else MEDIA_CLEANUP_PERIOD
+                    )
+                    if ts - child["lastMediaCleanup"] > child_cleanup_period:
                         LOGGER.debug(
                             "Initiating media cleanup for " + child["name"] + "..."
                         )
@@ -1022,6 +1038,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             "setup_retries": 0,
             "reauth_retries": 0,
             "runningMediaSync": False,
+            "media_cleanup_period_hours": 24,
             TIME_SYNC_DST: timeSyncDST,
             TIME_SYNC_NDST: timeSyncNDST,
             "controller": tapoController,
@@ -1238,7 +1255,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             )
 
             if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
-                if enableMediaSync and entry.entry_id in hass.data.get(DOMAIN, {}):
+                cleanup_hours = device.get("media_cleanup_period_hours", 24)
+                cleanup_period = cleanup_hours * 3600
+                ts = datetime.datetime.utcnow().timestamp()
+                last_cleanup = device.get("lastMediaCleanup", 0)
+                if (
+                    enableMediaSync
+                    and entry.entry_id in hass.data.get(DOMAIN, {})
+                    and (ts - last_cleanup >= cleanup_period)
+                ):
                     try:
                         await mediaCleanup(hass, entry, device)
                     except Exception as err:

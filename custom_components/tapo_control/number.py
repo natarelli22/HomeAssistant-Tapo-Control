@@ -7,7 +7,13 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.const import STATE_UNAVAILABLE, UnitOfTime
 
-from .const import DOMAIN, LOGGER
+from .const import (
+    DOMAIN,
+    LOGGER,
+    RECORDINGS_SOURCE,
+    RECORDINGS_SOURCE_SD,
+    RECORDINGS_SOURCE_TAPO_CARE,
+)
 from .tapo.entities import TapoEntity, TapoNumberEntity
 from .utils import check_and_create, check_functionality
 
@@ -164,6 +170,14 @@ async def async_setup_entry(
                 numbers.append(tapoChimeVolume)
                 numbers.append(tapoChimeDuration)
 
+        sync_source = config_entry.data.get(
+            RECORDINGS_SOURCE,
+            config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
+            LOGGER.debug("Adding TapoCareCleanupInterval number entity...")
+            numbers.append(TapoCareCleanupInterval(entry, hass, config_entry))
+
         return numbers
 
     numbers = await setupEntities(entry)
@@ -172,6 +186,51 @@ async def async_setup_entry(
         numbers.extend(await setupEntities(childDevice))
 
     async_add_entities(numbers)
+
+
+class TapoCareCleanupInterval(RestoreNumber, TapoEntity):
+    def __init__(self, entry: dict, hass: HomeAssistant, config_entry: ConfigEntry):
+        LOGGER.debug("TapoCareCleanupInterval - init - start")
+        self._attr_native_min_value = 1
+        self._attr_native_max_value = 168
+        self._attr_native_step = 1
+        self._attr_native_unit_of_measurement = UnitOfTime.HOURS
+        self._attr_native_value = entry.get("media_cleanup_period_hours", 24)
+        entry["media_cleanup_period_hours"] = int(self._attr_native_value)
+        self._hass = hass
+        self._config_entry = config_entry
+        self._attr_icon = "mdi:progress-clock"
+
+        TapoEntity.__init__(self, entry, "Tapo Care Cleanup Interval")
+        RestoreNumber.__init__(self)
+        LOGGER.debug("TapoCareCleanupInterval - init - end")
+
+    async def async_update(self) -> None:
+        await self._coordinator.async_request_refresh()
+
+    @property
+    def entity_category(self):
+        return EntityCategory.CONFIG
+
+    @property
+    def available(self) -> bool:
+        sync_source = self._config_entry.data.get(
+            RECORDINGS_SOURCE,
+            self._config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        return sync_source == RECORDINGS_SOURCE_TAPO_CARE
+
+    async def async_set_native_value(self, value: float) -> None:
+        val_int = int(value)
+        self._attr_native_value = val_int
+        self._entry["media_cleanup_period_hours"] = val_int
+        self.async_write_ha_state()
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        data = await self.async_get_last_number_data()
+        if data is not None and data.native_value is not None:
+            await self.async_set_native_value(data.native_value)
 
 
 class TapoChimeVolumePlay(RestoreNumber, TapoEntity):

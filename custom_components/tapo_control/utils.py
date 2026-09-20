@@ -419,7 +419,7 @@ async def deleteFilesNoLongerPresentInCamera(
                         and childID in fileName
                     )
                 ) and fileName not in entryData["mediaScanResult"]:
-                    LOGGER.info(
+                    LOGGER.debug(
                         "[SD Cleanup - %s] Removed recording no longer present in camera: %s",
                         device_name,
                         filePath,
@@ -578,7 +578,7 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                                 is_older = True
 
                     if is_older:
-                        LOGGER.info(
+                        LOGGER.debug(
                             "[%s Cleanup - %s] Removed expired recording: %s (older than %s seconds)",
                             sync_source,
                             device_name,
@@ -606,7 +606,7 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                         and not os.listdir(sdir)
                     ):
                         os.rmdir(sdir)
-                        LOGGER.info(
+                        LOGGER.debug(
                             "[%s Cleanup - %s] Removed empty directory: %s",
                             sync_source,
                             device_name,
@@ -715,7 +715,7 @@ async def mediaCleanup(hass, entry, deviceData):
             deviceData["lastCleanupResult"] = (
                 f"{total_deleted} files removed ({rec_count} recording(s): {rec_summary})"
             )
-            LOGGER.info(
+            LOGGER.debug(
                 "[%s Cleanup - %s] Finished cleanup: %d expired file(s) removed (%d recording(s): %s).",
                 sync_source,
                 device_name,
