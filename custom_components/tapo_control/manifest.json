@@ -1,12 +1,13 @@
 {
   "domain": "tapo_control",
   "name": "Tapo: Cameras Control",
-  "documentation": "https://github.com/JurajNyiri/HomeAssistant-Tapo-Control",
-  "issue_tracker": "https://github.com/JurajNyiri/HomeAssistant-Tapo-Control/issues",
+  "documentation": "https://github.com/natarelli22/HomeAssistant-Tapo-Control",
+  "issue_tracker": "https://github.com/natarelli22/HomeAssistant-Tapo-Control/issues",
   "codeowners": [
-    "@JurajNyiri"
+    "@JurajNyiri",
+    "@natarelli22"
   ],
-  "version": "7.1.27",
+  "version": "2026.09.20-0035",
   "requirements": [
     "pytapo==3.4.19",
     "python-kasa[speedups]==0.10.2"

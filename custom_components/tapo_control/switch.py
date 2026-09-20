@@ -5,7 +5,15 @@ from homeassistant.helpers.storage import Store
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, LOGGER, ENABLE_MEDIA_SYNC, MEDIA_SYNC_HOURS
+from .const import (
+    DOMAIN,
+    LOGGER,
+    ENABLE_MEDIA_SYNC,
+    MEDIA_SYNC_HOURS,
+    RECORDINGS_SOURCE,
+    RECORDINGS_SOURCE_SD,
+    RECORDINGS_SOURCE_TAPO_CARE,
+)
 from .tapo.entities import TapoSwitchEntity
 from .utils import (
     async_force_entry_refresh,
@@ -57,7 +65,14 @@ async def async_setup_entry(
                     )
                 )
 
-        if entry["controller"].isKLAP is False:
+        recordings_source = config_entry.data.get(
+            RECORDINGS_SOURCE,
+            config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        if (
+            entry["controller"].isKLAP is False
+            or recordings_source == RECORDINGS_SOURCE_TAPO_CARE
+        ):
             tapoEnableMediaSyncSwitch = TapoEnableMediaSyncSwitch(
                 entry,
                 hass,
@@ -350,7 +365,15 @@ class TapoEnableMediaSyncSwitch(TapoSwitchEntity):
         entry_storage: Store,
         savedValue: bool,
     ):
-        self._attr_extra_state_attributes = {}
+        recordings_source = config_entry.data.get(
+            RECORDINGS_SOURCE,
+            config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        self._attr_extra_state_attributes = {
+            "storage_path": getColdDirPathForEntry(hass, config_entry.entry_id),
+            "recordings_source": recordings_source,
+            "sync_source": recordings_source,
+        }
         TapoSwitchEntity.__init__(
             self,
             "Media Sync",
@@ -375,10 +398,16 @@ class TapoEnableMediaSyncSwitch(TapoSwitchEntity):
 
     def updateTapo(self, camData):
         mediaSyncHours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
+        recordings_source = self._config_entry.data.get(
+            RECORDINGS_SOURCE,
+            self._config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
         self._attr_extra_state_attributes["sync_hours"] = mediaSyncHours
         self._attr_extra_state_attributes["storage_path"] = getColdDirPathForEntry(
             self._hass, self._config_entry.entry_id
         )
+        self._attr_extra_state_attributes["recordings_source"] = recordings_source
+        self._attr_extra_state_attributes["sync_source"] = recordings_source
 
 
 class TapoChimeRingtoneSwitch(TapoSwitchEntity):

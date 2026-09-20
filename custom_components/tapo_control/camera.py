@@ -41,6 +41,7 @@ from .const import (
 from .utils import (
     async_force_entry_refresh,
     build_device_info,
+    getColdDirPathForEntry,
     getStreamSource,
 )
 
@@ -284,7 +285,10 @@ class TapoCamEntity(Camera):
         self._stream_unique_id = stream_unique_id or fallback_uid
         self._extra_arguments = config_entry.data.get(CONF_EXTRA_ARGUMENTS)
         self._enable_stream = config_entry.data.get(ENABLE_STREAM)
-        self._attr_extra_state_attributes = entry["camData"]["basic_info"]
+        self._attr_extra_state_attributes = dict(entry["camData"]["basic_info"])
+        self._attr_extra_state_attributes["storage_path"] = getColdDirPathForEntry(
+            hass, config_entry.entry_id
+        )
         self._attr_icon = "mdi:cctv"
         self._attr_should_poll = True
         self._is_cam_entity = True
@@ -356,6 +360,9 @@ class TapoCamEntity(Camera):
 
             for attr, value in camData["basic_info"].items():
                 self._attr_extra_state_attributes[attr] = value
+            self._attr_extra_state_attributes["storage_path"] = getColdDirPathForEntry(
+                self._hass, self._config_entry.entry_id
+            )
             if "alarm_config" in self._attr_extra_state_attributes:
                 self._attr_extra_state_attributes["alarm"] = camData["alarm_config"][
                     "automatic"

@@ -45,6 +45,9 @@ from .const import (
     MEDIA_CLEANUP_PERIOD,
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
+    RECORDINGS_SOURCE,
+    RECORDINGS_SOURCE_SD,
+    RECORDINGS_SOURCE_TAPO_CARE,
     MEDIA_VIEW_DAYS_ORDER,
     MEDIA_VIEW_RECORDINGS_ORDER,
     REPORTED_IP_ADDRESS,
@@ -485,21 +488,25 @@ async def async_migrate_entry(hass, config_entry: ConfigEntry):
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.debug("Unloading tapo_control...")
-    await hass.config_entries.async_unload_platforms(
-        entry,
-        [
-            "binary_sensor",
-            "sensor",
-            "button",
-            "camera",
-            "light",
-            "number",
-            "select",
-            "siren",
-            "switch",
-            "update",
-        ],
-    )
+    platforms = [
+        "binary_sensor",
+        "sensor",
+        "button",
+        "camera",
+        "light",
+        "number",
+        "select",
+        "siren",
+        "switch",
+        "update",
+    ]
+    for platform in platforms:
+        try:
+            await hass.config_entries.async_unload_platforms(entry, [platform])
+        except ValueError:
+            LOGGER.debug("Platform %s was not loaded for %s, skipping unload.", platform, entry.title)
+        except Exception as err:
+            LOGGER.debug("Error unloading platform %s for %s: %s", platform, entry.title, err)
 
     if "udp_monitor" in hass.data[DOMAIN][entry.entry_id]:
         await hass.data[DOMAIN][entry.entry_id]["udp_monitor"].async_stop()
@@ -588,6 +595,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     """Set up the Tapo: Cameras Control component from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    if "media_sync_source" in entry.data:
+        new_data = {**entry.data}
+        legacy_source = new_data.pop("media_sync_source")
+        if RECORDINGS_SOURCE not in new_data:
+            new_data[RECORDINGS_SOURCE] = legacy_source
+        hass.config_entries.async_update_entry(entry, data=new_data)
 
     host = entry.data.get(CONF_IP_ADDRESS)
     controlPort = entry.data.get(CONTROL_PORT)
@@ -1215,6 +1229,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             LOGGER.debug("mediaSync")
             device["mediaSyncRanOnce"] = True
             enableMediaSync = device[ENABLE_MEDIA_SYNC]
+            sync_source = entry.data.get(
+                RECORDINGS_SOURCE,
+                entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+            )
+
+            if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
+                if enableMediaSync and entry.entry_id in hass.data.get(DOMAIN, {}):
+                    try:
+                        await mediaCleanup(hass, entry, device)
+                    except Exception as err:
+                        LOGGER.error("Error during Tapo Care media cleanup: %s", err)
+                device["runningMediaSync"] = False
+                return
+
             mediaSyncHours = entry.data.get(MEDIA_SYNC_HOURS)
             LOGGER.debug("mediaSync - 2")
 

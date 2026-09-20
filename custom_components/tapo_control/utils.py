@@ -4,6 +4,7 @@ import hashlib
 import pathlib
 import onvif
 import os
+import re
 import shutil
 import socket
 import urllib.parse
@@ -59,6 +60,9 @@ from .const import (
     CONF_CUSTOM_STREAM_7,
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
+    RECORDINGS_SOURCE,
+    RECORDINGS_SOURCE_SD,
+    RECORDINGS_SOURCE_TAPO_CARE,
     TIME_SYNC_DST,
     TIME_SYNC_NDST,
     TPLINK_DOMAIN,
@@ -425,59 +429,125 @@ async def deleteColdFilesOlderThanMaxSyncTime(
     hass, entry, entryData, extension, folder
 ):
     childID = ""
-    if entryData["isChild"]:
-        childID = entryData["camData"]["basic_info"]["dev_id"]
+    if entryData.get("isChild"):
+        childID = entryData.get("camData", {}).get("basic_info", {}).get("dev_id", "")
     entry_id = entry.entry_id
     mediaSyncHours = entry.data.get(MEDIA_SYNC_HOURS)
 
-    if mediaSyncHours != "":
+    if mediaSyncHours != "" and mediaSyncHours is not None:
         coldDirPath = getColdDirPathForEntry(hass, entry_id)
-        tapoController: Tapo = entryData["controller"]
-        timeCorrection = await hass.async_add_executor_job(
-            tapoController.getTimeCorrection
-        )
+        timeCorrection = 0
+        try:
+            tapoController: Tapo = entryData.get("controller")
+            if tapoController:
+                timeCorrection = await hass.async_add_executor_job(
+                    tapoController.getTimeCorrection
+                )
+        except Exception:
+            timeCorrection = 0
+
         mediaSyncTime = int(mediaSyncHours) * 60 * 60
-        entry_id = entry.entry_id
         ts = datetime.datetime.utcnow().timestamp()
-        if os.path.exists(coldDirPath + "/" + folder + "/"):
-            listDirFiles = await hass.async_add_executor_job(
-                os.listdir, coldDirPath + "/" + folder + "/"
-            )
-            for f in listDirFiles:
-                fileName = f.replace(extension, "")
-                filePath = os.path.join(coldDirPath + "/" + folder + "/", f)
-                splitFileName = fileName.split("-")
-                if (entryData["isChild"] is False and fileName.count("-") == 1) or (
-                    (entryData["isChild"] is True and fileName.count("-") == 2)
-                    and childID in fileName
-                ):
-                    endTS = int(fileName.split("-")[len(splitFileName) - 1])
-                    last_modified = os.stat(filePath).st_mtime
-                    if (endTS < (int(ts) - (int(mediaSyncTime) + timeCorrection))) and (
-                        ts - last_modified > int(mediaSyncTime)
-                    ):
-                        LOGGER.debug(
-                            "[deleteColdFilesOlderThanMaxSyncTime] Removing "
-                            + filePath
-                            + " ("
-                            + fileName
-                            + ") because it's older than "
-                            + str(mediaSyncTime)
-                            + " seconds..."
+        folder_path = os.path.join(coldDirPath, folder)
+
+        def _sync_delete_cold_files():
+            if not os.path.exists(folder_path):
+                return
+            subdirs_to_check = []
+            downloaded_streams = entryData.get("downloadedStreams", {})
+            for root, dirs, files in os.walk(folder_path):
+                for f in files:
+                    if not f.endswith(extension):
+                        continue
+                    filePath = os.path.join(root, f)
+                    fileName = f[: -len(extension)]
+
+                    # 1. SD card format: {startTS}-{endTS} or {childID}-{startTS}-{endTS}
+                    splitFileName = fileName.split("-")
+                    is_sd_file = (
+                        (
+                            entryData.get("isChild") is False
+                            and fileName.count("-") == 1
+                            and splitFileName[0].isdigit()
+                            and splitFileName[1].isdigit()
                         )
-                        entryData["downloadedStreams"].pop(
-                            fileName,
-                            None,
+                        or (
+                            entryData.get("isChild") is True
+                            and fileName.count("-") == 2
+                            and childID in fileName
+                            and splitFileName[-1].isdigit()
                         )
-                        os.remove(filePath)
-                else:
-                    LOGGER.debug(
-                        "[deleteColdFilesOlderThanMaxSyncTime] Ignoring "
-                        + filePath
-                        + " ("
-                        + fileName
-                        + ") because of incorrect file name format..."
                     )
+                    file_end_ts = None
+                    if is_sd_file:
+                        try:
+                            file_end_ts = int(splitFileName[-1])
+                        except ValueError:
+                            file_end_ts = None
+
+                    # 2. Tapo Care format: YYYY-MM-DD_HH-MM-SS or YYYY-MM-DD-HH-MM-SS
+                    if file_end_ts is None:
+                        full_matches = list(
+                            re.finditer(
+                                r"(\d{4})[-_](\d{2})[-_](\d{2})[-_]+(\d{2})[-_](\d{2})[-_](\d{2})",
+                                fileName,
+                            )
+                        )
+                        if full_matches:
+                            try:
+                                y, mo, d, h, mi, s = map(int, full_matches[0].groups())
+                                dt_file = datetime.datetime(
+                                    y, mo, d, h, mi, s, tzinfo=datetime.timezone.utc
+                                )
+                                file_end_ts = int(dt_file.timestamp())
+                            except Exception:
+                                file_end_ts = None
+
+                    # 3. Fallback to file st_mtime
+                    try:
+                        last_modified = os.stat(filePath).st_mtime
+                    except OSError:
+                        continue
+
+                    is_older = False
+                    if file_end_ts is not None:
+                        if (
+                            file_end_ts < (int(ts) - (int(mediaSyncTime) + timeCorrection))
+                        ) and (ts - last_modified > int(mediaSyncTime)):
+                            is_older = True
+                    else:
+                        if ts - last_modified > int(mediaSyncTime):
+                            is_older = True
+
+                    if is_older:
+                        LOGGER.debug(
+                            "[deleteColdFilesOlderThanMaxSyncTime] Removing %s (%s) because it's older than %s seconds...",
+                            filePath,
+                            fileName,
+                            mediaSyncTime,
+                        )
+                        downloaded_streams.pop(fileName, None)
+                        try:
+                            os.remove(filePath)
+                        except OSError as err:
+                            LOGGER.debug("Error removing %s: %s", filePath, err)
+
+                if root != folder_path:
+                    subdirs_to_check.append(root)
+
+            # Remove empty date subdirectories
+            for sdir in sorted(subdirs_to_check, reverse=True):
+                try:
+                    if os.path.isdir(sdir) and not os.listdir(sdir):
+                        os.rmdir(sdir)
+                        LOGGER.debug(
+                            "[deleteColdFilesOlderThanMaxSyncTime] Removed empty directory %s",
+                            sdir,
+                        )
+                except OSError:
+                    pass
+
+        await hass.async_add_executor_job(_sync_delete_cold_files)
 
 
 async def mediaCleanup(hass, entry, deviceData):
@@ -511,12 +581,17 @@ async def mediaCleanup(hass, entry, deviceData):
     await deleteFilesNotIncluding(hass, hotDirPath + "/videos/", UUID)
     await deleteFilesNotIncluding(hass, hotDirPath + "/thumbs/", UUID)
 
-    await deleteFilesNoLongerPresentInCamera(
-        hass, entry_id, deviceData, ".mp4", "videos"
+    sync_source = entry.data.get(
+        RECORDINGS_SOURCE,
+        entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
     )
-    await deleteFilesNoLongerPresentInCamera(
-        hass, entry_id, deviceData, ".jpg", "thumbs"
-    )
+    if sync_source == RECORDINGS_SOURCE_SD:
+        await deleteFilesNoLongerPresentInCamera(
+            hass, entry_id, deviceData, ".mp4", "videos"
+        )
+        await deleteFilesNoLongerPresentInCamera(
+            hass, entry_id, deviceData, ".jpg", "thumbs"
+        )
 
     await deleteColdFilesOlderThanMaxSyncTime(hass, entry, deviceData, ".mp4", "videos")
     await deleteColdFilesOlderThanMaxSyncTime(hass, entry, deviceData, ".jpg", "thumbs")
@@ -2014,6 +2089,9 @@ async def update_listener(hass, entry):
         if motionSensor:
             await setupOnvif(hass, entry)
 
+    if entry.entry_id in hass.data.get(DOMAIN, {}):
+        hass.data[DOMAIN][entry.entry_id]["mediaSyncColdDir"] = False
+
 
 async def getLatestFirmwareVersion(hass, config_entry, entry, controller):
     entry["lastFirmwareCheck"] = datetime.datetime.utcnow().timestamp()
@@ -2268,6 +2346,26 @@ def isCacheSupported(check_function, rawData):
 
 async def scheduleAll(hass, device, entry, mediaSync):
     LOGGER.debug("scheduleAll for " + device["name"] + " called.")
+    sync_source = entry.data.get(
+        RECORDINGS_SOURCE,
+        entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+    )
+    if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
+        device["initialMediaScanDone"] = True
+        device["mediaSyncAvailable"] = True
+        if device["mediaSyncScheduled"] is False:
+            device["mediaSyncScheduled"] = True
+            LOGGER.debug("Scheduling media sync for Tapo Care")
+            callback = partial(mediaSync, entry=entry, device=device)
+            entry.async_on_unload(
+                async_track_time_interval(
+                    hass,
+                    callback,
+                    datetime.timedelta(seconds=60),
+                )
+            )
+        return
+
     if device["mediaSyncAvailable"]:
         if (
             device["initialMediaScanDone"] is True

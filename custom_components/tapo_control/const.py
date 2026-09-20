@@ -58,6 +58,10 @@ MEDIA_VIEW_DAYS_ORDER = "media_view_days_order"
 MEDIA_VIEW_RECORDINGS_ORDER = "media_view_recordings_order"
 MEDIA_SYNC_HOURS = "media_sync_hours"
 MEDIA_SYNC_COLD_STORAGE_PATH = "media_sync_cold_storage_path"
+RECORDINGS_SOURCE = "recordings_source"
+RECORDINGS_SOURCE_SD = "SD Card"
+RECORDINGS_SOURCE_TAPO_CARE = "Tapo Care"
+RECORDINGS_SOURCE_OPTIONS = [RECORDINGS_SOURCE_SD, RECORDINGS_SOURCE_TAPO_CARE]
 
 TOGGLE_STATES = ["on", "off"]
 

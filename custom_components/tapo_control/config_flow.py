@@ -42,6 +42,10 @@ from .const import (
     ENABLE_TIME_SYNC,
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
+    RECORDINGS_SOURCE,
+    RECORDINGS_SOURCE_SD,
+    RECORDINGS_SOURCE_TAPO_CARE,
+    RECORDINGS_SOURCE_OPTIONS,
     MEDIA_VIEW_DAYS_ORDER,
     MEDIA_VIEW_DAYS_ORDER_OPTIONS,
     MEDIA_VIEW_RECORDINGS_ORDER,
@@ -518,6 +522,7 @@ class FlowHandler(ConfigFlow):
                 return self.async_create_entry(
                     title=host,
                     data={
+                        RECORDINGS_SOURCE: RECORDINGS_SOURCE_SD,
                         MEDIA_VIEW_DAYS_ORDER: "Ascending",
                         MEDIA_VIEW_RECORDINGS_ORDER: "Ascending",
                         MEDIA_SYNC_HOURS: "",
@@ -554,6 +559,7 @@ class FlowHandler(ConfigFlow):
                 return self.async_create_entry(
                     title=host,
                     data={
+                        RECORDINGS_SOURCE: RECORDINGS_SOURCE_SD,
                         MEDIA_VIEW_DAYS_ORDER: "Ascending",
                         MEDIA_VIEW_RECORDINGS_ORDER: "Ascending",
                         MEDIA_SYNC_HOURS: "",
@@ -792,6 +798,7 @@ class FlowHandler(ConfigFlow):
                 return self.async_create_entry(
                     title=host,
                     data={
+                        RECORDINGS_SOURCE: RECORDINGS_SOURCE_SD,
                         MEDIA_VIEW_DAYS_ORDER: "Ascending",
                         MEDIA_VIEW_RECORDINGS_ORDER: "Ascending",
                         MEDIA_SYNC_HOURS: "",
@@ -1228,6 +1235,8 @@ class TapoOptionsFlowHandler(OptionsFlow):
 
     def __init__(self, config_entry):
         self.options = dict(config_entry.options)
+        self.selected_recordings_source = None
+        self._tapo_care_temp_input = None
 
     # todo rewrite strings into variables
     async def async_step_init(self, user_input=None):
@@ -1489,59 +1498,101 @@ class TapoOptionsFlowHandler(OptionsFlow):
         )
 
     async def async_step_media(self, user_input=None):
-        """Manage the Tapo options."""
+        """Manage the Tapo options - Step 1: Select recordings source."""
         LOGGER.debug(
-            "[%s] Opened Tapo options - media.", self.config_entry.data[CONF_IP_ADDRESS]
+            "[%s] Opened Tapo options - media source selection.",
+            self.config_entry.data[CONF_IP_ADDRESS],
         )
         errors = {}
-        media_view_days_order = self.config_entry.data[MEDIA_VIEW_DAYS_ORDER]
-        media_view_recordings_order = self.config_entry.data[
-            MEDIA_VIEW_RECORDINGS_ORDER
-        ]
-        media_sync_hours = self.config_entry.data[MEDIA_SYNC_HOURS]
-        media_sync_cold_storage_path = self.config_entry.data[
-            MEDIA_SYNC_COLD_STORAGE_PATH
-        ]
+        current_source = self.config_entry.data.get(
+            RECORDINGS_SOURCE,
+            self.config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
 
-        allConfigData = {**self.config_entry.data}
         if user_input is not None:
+            self.selected_recordings_source = user_input.get(
+                RECORDINGS_SOURCE, RECORDINGS_SOURCE_SD
+            )
+            if self.selected_recordings_source == RECORDINGS_SOURCE_TAPO_CARE:
+                return await self.async_step_media_tapo_care()
+            else:
+                return await self.async_step_media_sd()
+
+        return self.async_show_form(
+            step_id="media",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        RECORDINGS_SOURCE,
+                        description={"suggested_value": current_source},
+                    ): vol.In(RECORDINGS_SOURCE_OPTIONS),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_media_sd(self, user_input=None):
+        """Manage the Tapo options - Step 2: SD Card media options."""
+        LOGGER.debug(
+            "[%s] Opened Tapo options - SD Card media options.",
+            self.config_entry.data[CONF_IP_ADDRESS],
+        )
+        errors = {}
+        prev_source = self.config_entry.data.get(
+            RECORDINGS_SOURCE,
+            self.config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        # If previously on SD Card, suggest current path; if previously on Tapo Care, default to blank
+        suggested_cold_path = (
+            self.config_entry.data.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+            if prev_source == RECORDINGS_SOURCE_SD
+            else ""
+        )
+        media_view_days_order = self.config_entry.data.get(
+            MEDIA_VIEW_DAYS_ORDER, "Ascending"
+        )
+        media_view_recordings_order = self.config_entry.data.get(
+            MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
+        )
+        media_sync_hours = self.config_entry.data.get(MEDIA_SYNC_HOURS, "")
+
+        if user_input is not None:
+            # 1. Check if camera has an SD card inserted
+            controller = (
+                self.hass.data.get(DOMAIN, {})
+                .get(self.config_entry.entry_id, {})
+                .get("controller")
+            )
+            if controller:
+                try:
+                    await self.hass.async_add_executor_job(controller.getRecordingsList)
+                except Exception as err:
+                    err_str = str(err)
+                    if "STORAGE_NOT_EXIST" in err_str or "-71114" in err_str:
+                        return await self.async_step_media_no_sd()
+
             try:
-
-                if MEDIA_VIEW_DAYS_ORDER in user_input:
-                    media_view_days_order = user_input[MEDIA_VIEW_DAYS_ORDER]
+                submitted_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+                if submitted_cold_path is None:
+                    submitted_cold_path = ""
                 else:
-                    media_view_days_order = "Ascending"
+                    submitted_cold_path = submitted_cold_path.strip()
 
-                if MEDIA_VIEW_RECORDINGS_ORDER in user_input:
-                    media_view_recordings_order = user_input[
-                        MEDIA_VIEW_RECORDINGS_ORDER
-                    ]
-                else:
-                    media_view_recordings_order = "Ascending"
-
-                if MEDIA_SYNC_HOURS in user_input:
-                    media_sync_hours = user_input[MEDIA_SYNC_HOURS]
-                else:
-                    media_sync_hours = ""
-
-                if MEDIA_SYNC_COLD_STORAGE_PATH in user_input:
-                    media_sync_cold_storage_path = user_input[
-                        MEDIA_SYNC_COLD_STORAGE_PATH
-                    ]
-                else:
-                    media_sync_cold_storage_path = ""
-
-                if media_sync_cold_storage_path != "" and not os.path.exists(
-                    media_sync_cold_storage_path
-                ):
+                if submitted_cold_path != "" and not os.path.exists(submitted_cold_path):
                     raise Exception("Cold storage path does not exist")
 
-                allConfigData[MEDIA_VIEW_DAYS_ORDER] = media_view_days_order
-                allConfigData[MEDIA_VIEW_RECORDINGS_ORDER] = media_view_recordings_order
-                allConfigData[MEDIA_SYNC_HOURS] = media_sync_hours
-                allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = (
-                    media_sync_cold_storage_path
+                allConfigData = {**self.config_entry.data}
+                allConfigData.pop("media_sync_source", None)
+                allConfigData[RECORDINGS_SOURCE] = RECORDINGS_SOURCE_SD
+                allConfigData[MEDIA_VIEW_DAYS_ORDER] = user_input.get(
+                    MEDIA_VIEW_DAYS_ORDER, "Ascending"
                 )
+                allConfigData[MEDIA_VIEW_RECORDINGS_ORDER] = user_input.get(
+                    MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
+                )
+                allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
+                allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
+
                 self.hass.config_entries.async_update_entry(
                     self.config_entry,
                     data=allConfigData,
@@ -1553,9 +1604,17 @@ class TapoOptionsFlowHandler(OptionsFlow):
                 else:
                     errors["base"] = "unknown"
                 LOGGER.error(e)
+                suggested_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+                media_view_days_order = user_input.get(
+                    MEDIA_VIEW_DAYS_ORDER, media_view_days_order
+                )
+                media_view_recordings_order = user_input.get(
+                    MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
+                )
+                media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
 
         return self.async_show_form(
-            step_id="media",
+            step_id="media_sd",
             data_schema=vol.Schema(
                 {
                     vol.Required(
@@ -1572,7 +1631,133 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     ): int,
                     vol.Optional(
                         MEDIA_SYNC_COLD_STORAGE_PATH,
-                        description={"suggested_value": media_sync_cold_storage_path},
+                        description={"suggested_value": suggested_cold_path},
+                    ): str,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_media_no_sd(self, user_input=None):
+        """Dedicated warning screen when no SD card is detected."""
+        if user_input is not None:
+            return await self.async_step_media()
+
+        return self.async_show_form(
+            step_id="media_no_sd",
+            data_schema=vol.Schema({}),
+        )
+
+    async def async_step_media_tapo_care_error(self, user_input=None):
+        """Dedicated warning screen when Tapo Care cold storage path is missing or invalid."""
+        if user_input is not None:
+            return await self.async_step_media_tapo_care()
+
+        return self.async_show_form(
+            step_id="media_tapo_care_error",
+            data_schema=vol.Schema({}),
+        )
+
+    async def async_step_media_tapo_care(self, user_input=None):
+        """Manage the Tapo options - Step 2: Tapo Care media options."""
+        LOGGER.debug(
+            "[%s] Opened Tapo options - Tapo Care media options.",
+            self.config_entry.data[CONF_IP_ADDRESS],
+        )
+        errors = {}
+        prev_source = self.config_entry.data.get(
+            RECORDINGS_SOURCE,
+            self.config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        # If previously on Tapo Care, suggest current path; if previously on SD Card, default to blank
+        suggested_cold_path = (
+            self.config_entry.data.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+            if prev_source == RECORDINGS_SOURCE_TAPO_CARE
+            else ""
+        )
+        media_view_days_order = self.config_entry.data.get(
+            MEDIA_VIEW_DAYS_ORDER, "Ascending"
+        )
+        media_view_recordings_order = self.config_entry.data.get(
+            MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
+        )
+        media_sync_hours = self.config_entry.data.get(MEDIA_SYNC_HOURS, "")
+
+        if self._tapo_care_temp_input:
+            suggested_cold_path = self._tapo_care_temp_input.get(
+                MEDIA_SYNC_COLD_STORAGE_PATH, suggested_cold_path
+            )
+            media_view_days_order = self._tapo_care_temp_input.get(
+                MEDIA_VIEW_DAYS_ORDER, media_view_days_order
+            )
+            media_view_recordings_order = self._tapo_care_temp_input.get(
+                MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
+            )
+            media_sync_hours = self._tapo_care_temp_input.get(
+                MEDIA_SYNC_HOURS, media_sync_hours
+            )
+            self._tapo_care_temp_input = None
+
+        if user_input is not None:
+            submitted_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+            if submitted_cold_path is None:
+                submitted_cold_path = ""
+            else:
+                submitted_cold_path = submitted_cold_path.strip()
+
+            if not submitted_cold_path or not os.path.exists(submitted_cold_path):
+                self._tapo_care_temp_input = user_input
+                return await self.async_step_media_tapo_care_error()
+
+            try:
+                allConfigData = {**self.config_entry.data}
+                allConfigData.pop("media_sync_source", None)
+                allConfigData[RECORDINGS_SOURCE] = RECORDINGS_SOURCE_TAPO_CARE
+                allConfigData[MEDIA_VIEW_DAYS_ORDER] = user_input.get(
+                    MEDIA_VIEW_DAYS_ORDER, "Ascending"
+                )
+                allConfigData[MEDIA_VIEW_RECORDINGS_ORDER] = user_input.get(
+                    MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
+                )
+                allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
+                allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
+
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data=allConfigData,
+                )
+                return self.async_create_entry(title="", data=None)
+            except Exception as e:
+                errors["base"] = "unknown"
+                LOGGER.error(e)
+                suggested_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+                media_view_days_order = user_input.get(
+                    MEDIA_VIEW_DAYS_ORDER, media_view_days_order
+                )
+                media_view_recordings_order = user_input.get(
+                    MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
+                )
+                media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
+
+        return self.async_show_form(
+            step_id="media_tapo_care",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        MEDIA_VIEW_DAYS_ORDER,
+                        description={"suggested_value": media_view_days_order},
+                    ): vol.In(MEDIA_VIEW_DAYS_ORDER_OPTIONS),
+                    vol.Required(
+                        MEDIA_VIEW_RECORDINGS_ORDER,
+                        description={"suggested_value": media_view_recordings_order},
+                    ): vol.In(MEDIA_VIEW_RECORDINGS_ORDER_OPTIONS),
+                    vol.Optional(
+                        MEDIA_SYNC_HOURS,
+                        description={"suggested_value": media_sync_hours},
+                    ): int,
+                    vol.Optional(
+                        MEDIA_SYNC_COLD_STORAGE_PATH,
+                        description={"suggested_value": suggested_cold_path},
                     ): str,
                 }
             ),

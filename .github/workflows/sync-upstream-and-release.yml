@@ -1,0 +1,172 @@
+name: 'Sync Upstream & Release for HACS'
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'docs/**'
+      - '*.md'
+      - '.gitignore'
+  schedule:
+    # Executa toda segunda-feira às 04:00 UTC (01:00 horário de Brasília)
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      force_release:
+        description: 'Forçar geração de release mesmo sem novos commits do upstream'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync-and-release:
+    name: Sync Upstream, Test and Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add Upstream Remote
+        if: github.event_name != 'push'
+        run: |
+          git remote add upstream https://github.com/JurajNyiri/HomeAssistant-Tapo-Control.git
+          git fetch upstream main
+
+      - name: Check for Upstream Changes
+        if: github.event_name != 'push'
+        id: check_changes
+        run: |
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
+          if [ "$UPSTREAM_HEAD" = "$MERGE_BASE" ]; then
+            echo "already_up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "Fork is already up-to-date with upstream/main."
+          else
+            echo "already_up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "New commits detected in upstream/main."
+          fi
+
+      - name: Merge Upstream Changes
+        if: github.event_name != 'push' && steps.check_changes.outputs.already_up_to_date == 'false'
+        id: merge_upstream
+        run: |
+          if git merge upstream/main --no-edit -m "chore(sync): merge upstream/main into fork"; then
+            echo "merge_success=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "merge_success=false" >> "$GITHUB_OUTPUT"
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Notify on Conflict
+        if: failure() && steps.merge_upstream.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: "⚠️ Conflito de merge ao sincronizar com o Tapo Control oficial",
+              body: "O GitHub Actions tentou aplicar as novidades da versão oficial (upstream), mas encontrou um conflito de código com as alterações locais.\n\nPor favor, sincronize manualmente no seu computador para resolver os arquivos em conflito."
+            });
+
+      - name: Decide Whether to Build and Release
+        id: should_run
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Triggered by push to main. Proceeding with release."
+          elif [ "${{ steps.check_changes.outputs.already_up_to_date }}" = "false" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "New upstream changes detected. Proceeding with release."
+          elif [ "${{ inputs.force_release }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Force release requested. Proceeding with release."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No changes to release."
+          fi
+
+      - name: Set up Python
+        if: steps.should_run.outputs.run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate Python syntax
+        if: steps.should_run.outputs.run == 'true'
+        run: |
+          python -m py_compile custom_components/tapo_control/*.py
+
+      - name: Push Merged Changes
+        if: github.event_name != 'push' && steps.check_changes.outputs.already_up_to_date == 'false'
+        run: git push origin main
+
+      - name: Determine New Tag Version and Release Notes
+        if: steps.should_run.outputs.run == 'true'
+        id: get_release_info
+        run: |
+          DATE_TAG="v$(date +'%Y.%m.%d-%H%M')"
+          RAW_VERSION="$(date +'%Y.%m.%d-%H%M')"
+          echo "tag=$DATE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$RAW_VERSION" >> "$GITHUB_OUTPUT"
+          DELIMITER="EOF_$(date +%s)"
+          echo "body<<$DELIMITER" >> "$GITHUB_OUTPUT"
+          if [ -f RELEASE_NOTES.md ]; then
+            cat RELEASE_NOTES.md >> "$GITHUB_OUTPUT"
+          else
+            git log -1 --pretty=%B >> "$GITHUB_OUTPUT"
+          fi
+          echo "$DELIMITER" >> "$GITHUB_OUTPUT"
+
+      - name: Update Version in manifest.json
+        if: steps.should_run.outputs.run == 'true'
+        run: |
+          VERSION="${{ steps.get_release_info.outputs.version }}"
+          python3 -c "
+          import json
+          path = 'custom_components/tapo_control/manifest.json'
+          with open(path, 'r') as f:
+              data = json.load(f)
+          data['version'] = '$VERSION'
+          with open(path, 'w') as f:
+              json.dump(data, f, indent=2)
+          "
+          if [ -n "$(git status --porcelain custom_components/tapo_control/manifest.json)" ]; then
+            git add custom_components/tapo_control/manifest.json
+            git commit -m "chore(release): bump version to $VERSION [skip ci]"
+            git push origin main
+          fi
+
+      - name: Package Zip for HACS
+        if: steps.should_run.outputs.run == 'true'
+        run: |
+          cd custom_components
+          zip -r ../tapo_control.zip tapo_control -x "*/__pycache__/*" -x "*.pyc"
+          cd ..
+
+      - name: Create GitHub Release for HACS
+        if: steps.should_run.outputs.run == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_release_info.outputs.tag }}
+          name: ${{ steps.get_release_info.outputs.tag }}
+          body: ${{ steps.get_release_info.outputs.body }}
+          files: |
+            tapo_control.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

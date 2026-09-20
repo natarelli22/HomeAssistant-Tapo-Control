@@ -72,6 +72,41 @@
           "sound_detection_reset": "[Deteção de som] Tempo para repor o estado depois de não haver ruído acima do pico."
         },
         "description": "Modificar definições da sua câmara Tapo.\n\nUtilizar streaming do Home Assistant:\n- Sim: Maior atraso de reprodução, menor utilização de CPU, permite controlo de reprodução\n- Não: Atraso de reprodução muito curto, maior utilização de CPU, sem controlo de reprodução"
+      },
+      "media": {
+        "title": "Origem das Gravações",
+        "data": {
+          "recordings_source": "Origem das gravações no Navegador de Mídia"
+        },
+        "description": "Selecione a origem das gravações a configurar para o Navegador de Mídia"
+      },
+      "media_sd": {
+        "title": "Sincronização de Multimédia (Cartão SD)",
+        "data": {
+          "media_view_days_order": "Ordem dos dias no Navegador de Mídia",
+          "media_view_recordings_order": "Ordem das gravações no Navegador de Mídia",
+          "media_sync_hours": "Número de horas a manter sincronizadas",
+          "media_sync_cold_storage_path": "Caminho do cold storage"
+        },
+        "description": "Modificar definições de sincronização de gravações do Cartão SD.\n\nAs gravações são armazenadas na pasta de configuração do Home Assistant por padrão (.storage/tapo_control), o que é incluído nas cópias de segurança e pode crescer rapidamente. Defina um caminho de cold storage fora da sua configuração (por exemplo /media/tapo_control) para evitar cópias de segurança pesadas.\nDeixe em branco para utilizar o armazenamento padrão."
+      },
+      "media_tapo_care": {
+        "title": "Sincronização de Multimédia (Tapo Care)",
+        "data": {
+          "media_view_days_order": "Ordem dos dias no Navegador de Mídia",
+          "media_view_recordings_order": "Ordem das gravações no Navegador de Mídia",
+          "media_sync_hours": "Número de horas a manter sincronizadas",
+          "media_sync_cold_storage_path": "Caminho do cold storage"
+        },
+        "description": "Modificar definições de sincronização de gravações da cópia de segurança do Tapo Care.\n\nO caminho do cold storage é obrigatório (pasta onde os vídeos da cloud estão guardados)."
+      },
+      "media_no_sd": {
+        "title": "Cartão SD Não Encontrado",
+        "description": "Nenhum cartão SD foi detetado na câmara.\n\nPara utilizar a sincronização a partir do cartão, certifique-se de que um cartão MicroSD compatível esteja inserido e formatado na câmara através da aplicação Tapo.\n\nSe utiliza gravações na cloud, selecione a opção Tapo Care.\n\nClique em 'Enviar' para voltar e escolher outra opção."
+      },
+      "media_tapo_care_error": {
+        "title": "Caminho do Cold Storage Obrigatório",
+        "description": "Um caminho de cold storage válido é obrigatório ao usar o Tapo Care.\n\nIndique uma pasta existente no disco do Home Assistant (por exemplo /media/tapo_control) onde as gravações da cloud estão guardadas.\n\nClique em 'Enviar' para voltar e indicar um caminho válido."
       }
     },
     "error": {
@@ -80,6 +115,8 @@
       "connection_failed": "Falha na ligação",
       "invalid_auth_cloud": "Palavra-passe de cloud inválida.\nCertifique-se de que está a introduzir a palavra-passe da sua conta de cloud e NÃO a palavra-passe que criou nas definições da câmara (a não ser que sejam a mesma).\nTem de introduzir a palavra-passe que utilizou com o seu email ao iniciar sessão na app Tapo.\n\nCertifique-se de que tem a compatibilidade de terceiros ativada na app Tapo (Eu -> Tapo Lab -> Third-Party Compatibility - Ativado).",
       "camera_requires_admin": "A sua câmara necessita de uma palavra-passe de cloud para controlo",
+      "cold_storage_path_does_not_exist": "O caminho do cold storage não existe",
+      "cold_storage_path_required": "O caminho do cold storage é obrigatório ao usar o Tapo Care",
       "incorrect_peak_value": "Valor de pico de deteção de som incorreto."
     }
   }

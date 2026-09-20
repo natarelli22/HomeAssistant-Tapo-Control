@@ -111,13 +111,39 @@
         "description": "Configure noise detection sensor"
       },
       "media": {
+        "title": "Recordings Source",
+        "data": {
+          "recordings_source": "Recordings source in Media Browser"
+        },
+        "description": "Select the recordings source to configure for Media Browser"
+      },
+      "media_sd": {
+        "title": "Media Synchronization (SD Card)",
         "data": {
           "media_view_days_order": "Order of days in Media Browser",
           "media_view_recordings_order": "Order of recordings in Media Browser",
           "media_sync_hours": "Number of hours to keep synchronized",
-          "media_sync_cold_storage_path": "[Requires restart] Cold storage path"
+          "media_sync_cold_storage_path": "Cold storage path"
         },
-        "description": "Modify settings of recordings media synchronization.\n\nRecordings are stored in the Home Assistant config folder by default (.storage/tapo_control) which is included in backups and can grow quickly. Set a Cold storage path outside of your config (for example /media/tapo_control) to avoid bloating backups."
+        "description": "Modify settings of recordings media synchronization from camera SD Card.\n\nRecordings are stored in the Home Assistant config folder by default (.storage/tapo_control) which is included in backups and can grow quickly. Set a Cold storage path outside of your config (for example /media/tapo_control) to avoid bloating backups.\nLeave empty to use default Home Assistant storage."
+      },
+      "media_tapo_care": {
+        "title": "Media Synchronization (Tapo Care)",
+        "data": {
+          "media_view_days_order": "Order of days in Media Browser",
+          "media_view_recordings_order": "Order of recordings in Media Browser",
+          "media_sync_hours": "Number of hours to keep synchronized",
+          "media_sync_cold_storage_path": "Cold storage path"
+        },
+        "description": "Modify settings of recordings media synchronization from Tapo Care backup.\n\nCold storage path is required (folder where cloud videos are stored)."
+      },
+      "media_no_sd": {
+        "title": "SD Card Not Found",
+        "description": "No SD card was detected in the camera.\n\nTo use recordings synchronization from an SD card, please make sure a compatible MicroSD card is inserted and formatted via the Tapo app.\n\nIf you use cloud backup recordings instead, please select Tapo Care.\n\nClick Submit to go back and select another option."
+      },
+      "media_tapo_care_error": {
+        "title": "Cold Storage Path Required",
+        "description": "A valid cold storage path is required when using Tapo Care.\n\nPlease enter an existing folder path on your Home Assistant disk (for example /media/tapo_control) where cloud recordings are stored.\n\nClick Submit to return and enter a valid path."
       },
       "update_interval": {
         "data": {
@@ -162,6 +188,7 @@
       "connection_failed": "Connection failed",
       "invalid_auth_cloud": "Invalid cloud password.\nMake sure you are entering the password for your cloud account and NOT the password which you created via the camera settings (unless they are the same).\nYou need to enter password which you used with your email when signing into the Tapo app.\n\nEnsure you have Third-Party compatibility turned on in Tapo App (Me -> Tapo Lab -> Third-Party Compatibility - On).",
       "cold_storage_path_does_not_exist": "Cold storage path does not exist",
+      "cold_storage_path_required": "Cold storage path is required when using Tapo Care",
       "camera_requires_admin": "Camera requires cloud password for control",
       "incorrect_peak_value": "Incorrect sound detection peak value.",
       "incorrect_options_action": "Incorrect action chosen"
