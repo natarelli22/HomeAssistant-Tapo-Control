@@ -104,10 +104,6 @@
       "media_no_sd": {
         "title": "Cartão SD Não Encontrado",
         "description": "Nenhum cartão SD foi detectado na câmera.\n\nPara utilizar a sincronização a partir do cartão, certifique-se de que um cartão MicroSD compatível esteja inserido e formatado na câmera através do aplicativo Tapo.\n\nSe você utiliza gravações na nuvem, selecione a opção Tapo Care.\n\nClique em 'Enviar' para voltar e escolher outra opção."
-      },
-      "media_tapo_care_error": {
-        "title": "Caminho do Cold Storage Obrigatório",
-        "description": "Um caminho de cold storage válido é obrigatório ao usar o Tapo Care.\n\nInforme uma pasta existente no disco do Home Assistant (por exemplo /media/tapo_control) onde as gravações da nuvem estão armazenadas.\n\nClique em 'Enviar' para retornar e preencher um caminho válido."
       }
     },
     "error": {

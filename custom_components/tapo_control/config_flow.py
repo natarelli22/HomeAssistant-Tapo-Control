@@ -1237,7 +1237,6 @@ class TapoOptionsFlowHandler(OptionsFlow):
     def __init__(self, config_entry):
         self.options = dict(config_entry.options)
         self.selected_recordings_source = None
-        self._tapo_care_temp_input = None
 
     # todo rewrite strings into variables
     async def async_step_init(self, user_input=None):
@@ -1572,47 +1571,46 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     if "STORAGE_NOT_EXIST" in err_str or "-71114" in err_str:
                         return await self.async_step_media_no_sd()
 
-            try:
-                submitted_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
-                if submitted_cold_path is None:
-                    submitted_cold_path = ""
-                else:
-                    submitted_cold_path = submitted_cold_path.strip()
+            submitted_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+            if submitted_cold_path is None:
+                submitted_cold_path = ""
+            else:
+                submitted_cold_path = submitted_cold_path.strip()
 
-                if submitted_cold_path != "" and not os.path.exists(submitted_cold_path):
-                    raise Exception("Cold storage path does not exist")
+            if submitted_cold_path != "" and not os.path.exists(submitted_cold_path):
+                errors[MEDIA_SYNC_COLD_STORAGE_PATH] = "cold_storage_path_does_not_exist"
 
-                allConfigData = {**self.config_entry.data}
-                allConfigData.pop("media_sync_source", None)
-                allConfigData[RECORDINGS_SOURCE] = RECORDINGS_SOURCE_SD
-                allConfigData[MEDIA_VIEW_DAYS_ORDER] = user_input.get(
-                    MEDIA_VIEW_DAYS_ORDER, "Ascending"
-                )
-                allConfigData[MEDIA_VIEW_RECORDINGS_ORDER] = user_input.get(
-                    MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
-                )
-                allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
-                allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
+            if not errors:
+                try:
+                    allConfigData = {**self.config_entry.data}
+                    allConfigData.pop("media_sync_source", None)
+                    allConfigData[RECORDINGS_SOURCE] = RECORDINGS_SOURCE_SD
+                    allConfigData[MEDIA_VIEW_DAYS_ORDER] = user_input.get(
+                        MEDIA_VIEW_DAYS_ORDER, "Ascending"
+                    )
+                    allConfigData[MEDIA_VIEW_RECORDINGS_ORDER] = user_input.get(
+                        MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
+                    )
+                    allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
+                    allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
 
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    data=allConfigData,
-                )
-                return self.async_create_entry(title="", data=None)
-            except Exception as e:
-                if "Cold storage path does not exist" in str(e):
-                    errors["base"] = "cold_storage_path_does_not_exist"
-                else:
+                    self.hass.config_entries.async_update_entry(
+                        self.config_entry,
+                        data=allConfigData,
+                    )
+                    return self.async_create_entry(title="", data=None)
+                except Exception as e:
                     errors["base"] = "unknown"
-                LOGGER.error(e)
-                suggested_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
-                media_view_days_order = user_input.get(
-                    MEDIA_VIEW_DAYS_ORDER, media_view_days_order
-                )
-                media_view_recordings_order = user_input.get(
-                    MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
-                )
-                media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
+                    LOGGER.error(e)
+
+            suggested_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
+            media_view_days_order = user_input.get(
+                MEDIA_VIEW_DAYS_ORDER, media_view_days_order
+            )
+            media_view_recordings_order = user_input.get(
+                MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
+            )
+            media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
 
         return self.async_show_form(
             step_id="media_sd",
@@ -1649,16 +1647,6 @@ class TapoOptionsFlowHandler(OptionsFlow):
             data_schema=vol.Schema({}),
         )
 
-    async def async_step_media_tapo_care_error(self, user_input=None):
-        """Dedicated warning screen when Tapo Care cold storage path is missing or invalid."""
-        if user_input is not None:
-            return await self.async_step_media_tapo_care()
-
-        return self.async_show_form(
-            step_id="media_tapo_care_error",
-            data_schema=vol.Schema({}),
-        )
-
     async def async_step_media_tapo_care(self, user_input=None):
         """Manage the Tapo options - Step 2: Tapo Care media options."""
         LOGGER.debug(
@@ -1687,24 +1675,6 @@ class TapoOptionsFlowHandler(OptionsFlow):
             TAPO_CARE_CLEANUP_TIME, ""
         )
 
-        if self._tapo_care_temp_input:
-            suggested_cold_path = self._tapo_care_temp_input.get(
-                MEDIA_SYNC_COLD_STORAGE_PATH, suggested_cold_path
-            )
-            media_view_days_order = self._tapo_care_temp_input.get(
-                MEDIA_VIEW_DAYS_ORDER, media_view_days_order
-            )
-            media_view_recordings_order = self._tapo_care_temp_input.get(
-                MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
-            )
-            media_sync_hours = self._tapo_care_temp_input.get(
-                MEDIA_SYNC_HOURS, media_sync_hours
-            )
-            tapo_care_cleanup_time = self._tapo_care_temp_input.get(
-                TAPO_CARE_CLEANUP_TIME, tapo_care_cleanup_time
-            )
-            self._tapo_care_temp_input = None
-
         if user_input is not None:
             submitted_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
             if submitted_cold_path is None:
@@ -1732,11 +1702,12 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         f"{int(time_match.group(1)):02d}:{int(time_match.group(2)):02d}"
                     )
 
-            if not errors:
-                if not submitted_cold_path or not os.path.exists(submitted_cold_path):
-                    self._tapo_care_temp_input = user_input
-                    return await self.async_step_media_tapo_care_error()
+            if not submitted_cold_path:
+                errors[MEDIA_SYNC_COLD_STORAGE_PATH] = "cold_storage_path_required"
+            elif not os.path.exists(submitted_cold_path):
+                errors[MEDIA_SYNC_COLD_STORAGE_PATH] = "cold_storage_path_does_not_exist"
 
+            if not errors:
                 try:
                     allConfigData = {**self.config_entry.data}
                     allConfigData.pop("media_sync_source", None)

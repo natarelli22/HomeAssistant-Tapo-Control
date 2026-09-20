@@ -142,10 +142,6 @@
         "title": "SD Card Not Found",
         "description": "No SD card was detected in the camera.\n\nTo use recordings synchronization from an SD card, please make sure a compatible MicroSD card is inserted and formatted via the Tapo app.\n\nIf you use cloud backup recordings instead, please select Tapo Care.\n\nClick Submit to go back and select another option."
       },
-      "media_tapo_care_error": {
-        "title": "Cold Storage Path Required",
-        "description": "A valid cold storage path is required when using Tapo Care.\n\nPlease enter an existing folder path on your Home Assistant disk (for example /media/tapo_control) where cloud recordings are stored.\n\nClick Submit to return and enter a valid path."
-      },
       "update_interval": {
         "data": {
           "update_interval_main": "Minimum update interval when powered from mains",
