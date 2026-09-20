@@ -473,6 +473,19 @@ async def deleteColdFilesOlderThanMaxSyncTime(
             entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
         )
 
+        try:
+            local_now = dt_util.now()
+        except Exception:
+            local_now = datetime.datetime.now()
+
+        tapo_care_cutoff_date = None
+        tapo_care_cutoff_ts = None
+        if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
+            retention_days = max(1, int(mediaSyncHours) // 24)
+            tapo_care_cutoff_date = local_now.date() - datetime.timedelta(days=retention_days)
+            today_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            tapo_care_cutoff_ts = int((today_midnight - datetime.timedelta(days=retention_days)).timestamp())
+
         def _sync_delete_cold_files():
             deleted_count = 0
             deleted_files = []
@@ -512,6 +525,7 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                         )
                     )
                     file_end_ts = None
+                    file_date = None
                     if is_sd_file:
                         try:
                             file_end_ts = int(splitFileName[-1])
@@ -529,12 +543,14 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                         if full_matches:
                             try:
                                 y, mo, d, h, mi, s = map(int, full_matches[0].groups())
+                                file_date = datetime.date(y, mo, d)
                                 dt_file = datetime.datetime(
-                                    y, mo, d, h, mi, s, tzinfo=datetime.timezone.utc
+                                    y, mo, d, h, mi, s, tzinfo=local_now.tzinfo
                                 )
                                 file_end_ts = int(dt_file.timestamp())
                             except Exception:
                                 file_end_ts = None
+                                file_date = None
                         elif sync_source == RECORDINGS_SOURCE_TAPO_CARE:
                             # Fallback: check if parent directory is a date folder (e.g. YYYY-MM-DD)
                             folder_date_match = re.search(
@@ -543,12 +559,14 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                             if folder_date_match:
                                 try:
                                     y, mo, d = map(int, folder_date_match.groups())
+                                    file_date = datetime.date(y, mo, d)
                                     dt_file = datetime.datetime(
-                                        y, mo, d, 23, 59, 59, tzinfo=datetime.timezone.utc
+                                        y, mo, d, 23, 59, 59, tzinfo=local_now.tzinfo
                                     )
                                     file_end_ts = int(dt_file.timestamp())
                                 except Exception:
                                     file_end_ts = None
+                                    file_date = None
 
                     # 3. Fallback to file st_mtime
                     try:
@@ -559,9 +577,14 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                     is_older = False
                     cutoff = int(ts) - (int(mediaSyncTime) + timeCorrection)
                     if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
-                        # In Tapo Care mode, retention is determined strictly by the recording timestamp
-                        if file_end_ts is not None:
-                            if file_end_ts < cutoff:
+                        # In Tapo Care mode, retention is aligned to calendar days from midnight
+                        # matching tapo-care-backup retention window so files from a day are kept
+                        # until that full day has elapsed and exited the backup window.
+                        if file_date is not None and tapo_care_cutoff_date is not None:
+                            if file_date < tapo_care_cutoff_date:
+                                is_older = True
+                        elif file_end_ts is not None and tapo_care_cutoff_ts is not None:
+                            if file_end_ts < tapo_care_cutoff_ts:
                                 is_older = True
                         else:
                             if ts - last_modified > int(mediaSyncTime):
@@ -579,11 +602,13 @@ async def deleteColdFilesOlderThanMaxSyncTime(
 
                     if is_older:
                         LOGGER.debug(
-                            "[%s Cleanup - %s] Removed expired recording: %s (older than %s seconds)",
+                            "[%s Cleanup - %s] Removed expired recording: %s (cutoff: %s)",
                             sync_source,
                             device_name,
                             filePath,
-                            mediaSyncTime,
+                            tapo_care_cutoff_date
+                            if sync_source == RECORDINGS_SOURCE_TAPO_CARE and tapo_care_cutoff_date
+                            else f"{mediaSyncTime}s",
                         )
                         downloaded_streams.pop(fileName, None)
                         try:
