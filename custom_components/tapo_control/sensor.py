@@ -410,6 +410,10 @@ class TapoSyncSensor(TapoSensorEntity):
                 attributes["last_cleanup"] = (
                     dt_util.utc_from_timestamp(last_cleanup).isoformat()
                 )
+            attributes["last_deleted_count"] = data.get("lastDeletedCount", 0)
+            attributes["last_cleanup_result"] = data.get(
+                "lastCleanupResult", "No cleanup performed yet"
+            )
             self._attr_extra_state_attributes = attributes
             return
 
@@ -443,12 +447,25 @@ class TapoSyncSensor(TapoSensorEntity):
             self._attr_native_value = "Idle"
             self._attr_icon = "mdi:sd"
 
-        self._attr_extra_state_attributes = {
+        attributes = {
             "storage_mode": RECORDINGS_SOURCE_SD,
             "sync_enabled": bool(enable_media_sync),
             "media_sync_available": data.get("mediaSyncAvailable", True),
             "download_progress": data.get("downloadProgress"),
         }
+        media_sync_hours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
+        if media_sync_hours:
+            attributes["retention_hours"] = media_sync_hours
+        last_cleanup = data.get("lastMediaCleanup")
+        if last_cleanup:
+            attributes["last_cleanup"] = (
+                dt_util.utc_from_timestamp(last_cleanup).isoformat()
+            )
+        attributes["last_deleted_count"] = data.get("lastDeletedCount", 0)
+        attributes["last_cleanup_result"] = data.get(
+            "lastCleanupResult", "No cleanup performed yet"
+        )
+        self._attr_extra_state_attributes = attributes
 
 
 class TapoLastRebootTimeSensor(TapoSensorEntity):

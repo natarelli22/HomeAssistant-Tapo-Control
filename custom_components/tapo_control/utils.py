@@ -393,6 +393,7 @@ async def deleteFilesNoLongerPresentInCamera(
     childID = ""
     if entryData["isChild"]:
         childID = entryData["camData"]["basic_info"]["dev_id"]
+    deleted_count = 0
     if entryData["initialMediaScanDone"] is True:
         LOGGER.debug("deleteFilesNoLongerPresentInCamera - Initial scanning done.")
         coldDirPath = getColdDirPathForEntry(hass, entry_id)
@@ -411,18 +412,20 @@ async def deleteFilesNoLongerPresentInCamera(
                         and childID in fileName
                     )
                 ) and fileName not in entryData["mediaScanResult"]:
-                    LOGGER.debug(
-                        "[deleteFilesNoLongerPresentInCamera] Removing "
-                        + filePath
-                        + " ("
-                        + fileName
-                        + ")..."
+                    LOGGER.info(
+                        "[SD Cleanup] Removed recording no longer present in camera: %s",
+                        filePath,
                     )
                     entryData["downloadedStreams"].pop(
                         fileName,
                         None,
                     )
-                    os.remove(filePath)
+                    try:
+                        os.remove(filePath)
+                        deleted_count += 1
+                    except OSError as err:
+                        LOGGER.error("Error removing %s: %s", filePath, err)
+    return deleted_count
 
 
 async def deleteColdFilesOlderThanMaxSyncTime(
@@ -456,6 +459,7 @@ async def deleteColdFilesOlderThanMaxSyncTime(
         )
 
         def _sync_delete_cold_files():
+            deleted_count = 0
             scan_path = folder_path
             if not os.path.exists(scan_path):
                 if (
@@ -465,7 +469,7 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                 ):
                     scan_path = coldDirPath
                 else:
-                    return
+                    return 0
             subdirs_to_check = []
             downloaded_streams = entryData.get("downloadedStreams", {})
             for root, dirs, files in os.walk(scan_path):
@@ -558,17 +562,18 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                                 is_older = True
 
                     if is_older:
-                        LOGGER.debug(
-                            "[deleteColdFilesOlderThanMaxSyncTime] Removing %s (%s) because it's older than %s seconds...",
+                        LOGGER.info(
+                            "[%s Cleanup] Removed expired recording: %s (older than %s seconds)",
+                            sync_source,
                             filePath,
-                            fileName,
                             mediaSyncTime,
                         )
                         downloaded_streams.pop(fileName, None)
                         try:
                             os.remove(filePath)
+                            deleted_count += 1
                         except OSError as err:
-                            LOGGER.debug("Error removing %s: %s", filePath, err)
+                            LOGGER.error("Error removing %s: %s", filePath, err)
 
                 if root != scan_path and root != coldDirPath:
                     subdirs_to_check.append(root)
@@ -583,14 +588,18 @@ async def deleteColdFilesOlderThanMaxSyncTime(
                         and not os.listdir(sdir)
                     ):
                         os.rmdir(sdir)
-                        LOGGER.debug(
-                            "[deleteColdFilesOlderThanMaxSyncTime] Removed empty directory %s",
+                        LOGGER.info(
+                            "[%s Cleanup] Removed empty directory: %s",
+                            sync_source,
                             sdir,
                         )
                 except OSError:
                     pass
 
-        await hass.async_add_executor_job(_sync_delete_cold_files)
+            return deleted_count
+
+        return await hass.async_add_executor_job(_sync_delete_cold_files)
+    return 0
 
 
 async def mediaCleanup(hass, entry, deviceData):
@@ -612,45 +621,97 @@ async def mediaCleanup(hass, entry, deviceData):
     deviceData["lastMediaCleanup"] = ts
     hotDirPath = getHotDirPathForEntry(hass, entry_id)
 
-    # clean cache files from old HA instance
-    LOGGER.debug(
-        "Removing cache files from old HA instances for entity "
-        + entry_id
-        + ", child ID:'"
-        + childID
-        + "..."
-    )
-
-    await deleteFilesNotIncluding(hass, hotDirPath + "/videos/", UUID)
-    await deleteFilesNotIncluding(hass, hotDirPath + "/thumbs/", UUID)
-
     sync_source = entry.data.get(
         RECORDINGS_SOURCE,
         entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
     )
-    if sync_source == RECORDINGS_SOURCE_SD:
-        await deleteFilesNoLongerPresentInCamera(
-            hass, entry_id, deviceData, ".mp4", "videos"
-        )
-        await deleteFilesNoLongerPresentInCamera(
-            hass, entry_id, deviceData, ".jpg", "thumbs"
+    is_tapo_care = sync_source == RECORDINGS_SOURCE_TAPO_CARE
+
+    def _update_sync_sensor():
+        for e in deviceData.get("entities", []):
+            entity = e.get("entity")
+            if entity and getattr(entity, "_name_suffix", "") == "Recordings Synchronization":
+                entity.updateTapo(deviceData.get("camData"))
+                entity.async_schedule_update_ha_state(True)
+
+    if is_tapo_care:
+        deviceData["runningMediaSync"] = True
+        _update_sync_sensor()
+        if "coordinator" in deviceData:
+            await deviceData["coordinator"].async_request_refresh()
+        await asyncio.sleep(1)
+
+    try:
+        # clean cache files from old HA instance
+        LOGGER.debug(
+            "Removing cache files from old HA instances for entity "
+            + entry_id
+            + ", child ID:'"
+            + childID
+            + "..."
         )
 
-    await deleteColdFilesOlderThanMaxSyncTime(hass, entry, deviceData, ".mp4", "videos")
-    await deleteColdFilesOlderThanMaxSyncTime(hass, entry, deviceData, ".jpg", "thumbs")
+        await deleteFilesNotIncluding(hass, hotDirPath + "/videos/", UUID)
+        await deleteFilesNotIncluding(hass, hotDirPath + "/thumbs/", UUID)
 
-    # Delete everything other than HOT_DIR_DELETE_TIME seconds from hot storage
-    LOGGER.debug(
-        "Deleting hot storage files older than "
-        + str(HOT_DIR_DELETE_TIME)
-        + " seconds for entity "
-        + entry_id
-        + ", child ID:'"
-        + childID
-        + "..."
-    )
-    await deleteFilesOlderThan(hass, hotDirPath + "/videos/", HOT_DIR_DELETE_TIME)
-    await deleteFilesOlderThan(hass, hotDirPath + "/thumbs/", HOT_DIR_DELETE_TIME)
+        total_deleted = 0
+        if sync_source == RECORDINGS_SOURCE_SD:
+            total_deleted += (
+                await deleteFilesNoLongerPresentInCamera(
+                    hass, entry_id, deviceData, ".mp4", "videos"
+                )
+                or 0
+            )
+            total_deleted += (
+                await deleteFilesNoLongerPresentInCamera(
+                    hass, entry_id, deviceData, ".jpg", "thumbs"
+                )
+                or 0
+            )
+
+        deleted_mp4 = await deleteColdFilesOlderThanMaxSyncTime(
+            hass, entry, deviceData, ".mp4", "videos"
+        )
+        deleted_jpg = await deleteColdFilesOlderThanMaxSyncTime(
+            hass, entry, deviceData, ".jpg", "thumbs"
+        )
+        total_deleted += (deleted_mp4 or 0) + (deleted_jpg or 0)
+
+        deviceData["lastDeletedCount"] = total_deleted
+        if total_deleted > 0:
+            deviceData["lastCleanupResult"] = f"{total_deleted} files removed"
+            LOGGER.info(
+                "[%s Cleanup] Finished cleanup for %s: %d expired recording(s) removed.",
+                sync_source,
+                entry_id,
+                total_deleted,
+            )
+        else:
+            deviceData["lastCleanupResult"] = "No expired files to remove"
+            LOGGER.debug(
+                "[%s Cleanup] Finished cleanup for %s: no expired recordings to remove.",
+                sync_source,
+                entry_id,
+            )
+
+        # Delete everything other than HOT_DIR_DELETE_TIME seconds from hot storage
+        LOGGER.debug(
+            "Deleting hot storage files older than "
+            + str(HOT_DIR_DELETE_TIME)
+            + " seconds for entity "
+            + entry_id
+            + ", child ID:'"
+            + childID
+            + "..."
+        )
+        await deleteFilesOlderThan(hass, hotDirPath + "/videos/", HOT_DIR_DELETE_TIME)
+        await deleteFilesOlderThan(hass, hotDirPath + "/thumbs/", HOT_DIR_DELETE_TIME)
+    finally:
+        if is_tapo_care:
+            deviceData["runningMediaSync"] = False
+        _update_sync_sensor()
+        if "coordinator" in deviceData:
+            await deviceData["coordinator"].async_request_refresh()
 
 
 async def deleteDir(hass, dirPath):
