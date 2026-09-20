@@ -7,7 +7,7 @@
     "@JurajNyiri",
     "@natarelli22"
   ],
-  "version": "2026.09.20-0035",
+  "version": "2026.09.20-0346",
   "requirements": [
     "pytapo==3.4.19",
     "python-kasa[speedups]==0.10.2"
