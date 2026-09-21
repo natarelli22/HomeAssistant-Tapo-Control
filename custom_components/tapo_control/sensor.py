@@ -404,9 +404,6 @@ class TapoSyncSensor(TapoSensorEntity):
                 "cold_storage_path": cold_storage_path,
                 "cold_storage_found": storage_exists,
             }
-            media_sync_hours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
-            if media_sync_hours:
-                attributes["retention_hours"] = media_sync_hours
             cleanup_time = self._config_entry.data.get(TAPO_CARE_CLEANUP_TIME)
             if cleanup_time:
                 attributes["cleanup_time"] = cleanup_time
@@ -423,57 +420,44 @@ class TapoSyncSensor(TapoSensorEntity):
                     attributes["next_cleanup"] = next_run.isoformat()
                 except Exception:
                     pass
-            last_cleanup = data.get("lastMediaCleanup")
-            if last_cleanup:
-                attributes["last_cleanup"] = (
-                    dt_util.utc_from_timestamp(last_cleanup).isoformat()
-                )
-            attributes["last_deleted_recordings"] = data.get(
-                "lastDeletedRecordings", []
-            )
-            attributes["total_deleted_count"] = data.get("totalDeletedCount", 0)
-            attributes["last_cleanup_result"] = data.get(
-                "lastCleanupResult", "No cleanup performed yet"
-            )
-            self._attr_extra_state_attributes = attributes
-            return
+        else:
+            LOGGER.debug("Initial Media Scan: %s", data.get("initialMediaScanDone"))
+            LOGGER.debug("Media Sync Available: %s", data.get("mediaSyncAvailable"))
+            LOGGER.debug("Download Progress: %s", data.get("downloadProgress"))
+            LOGGER.debug("Running media sync: %s", data.get("runningMediaSync"))
+            LOGGER.debug("Media Sync Schedueled: %s", data.get("mediaSyncScheduled"))
+            LOGGER.debug("Media Sync Ran Once: %s", data.get("mediaSyncRanOnce"))
 
-        LOGGER.debug("Initial Media Scan: %s", data.get("initialMediaScanDone"))
-        LOGGER.debug("Media Sync Available: %s", data.get("mediaSyncAvailable"))
-        LOGGER.debug("Download Progress: %s", data.get("downloadProgress"))
-        LOGGER.debug("Running media sync: %s", data.get("runningMediaSync"))
-        LOGGER.debug("Media Sync Schedueled: %s", data.get("mediaSyncScheduled"))
-        LOGGER.debug("Media Sync Ran Once: %s", data.get("mediaSyncRanOnce"))
-
-        if enable_media_sync or runningMediaSync is True:
-            if not data.get("initialMediaScanDone") or (
-                data.get("initialMediaScanDone") and not data.get("mediaSyncRanOnce")
-            ):
-                self._attr_native_value = "Starting"
-                self._attr_icon = "mdi:sync"
-            elif not data.get("mediaSyncAvailable"):
-                self._attr_native_value = "No Recordings Found"
-                self._attr_icon = "mdi:sd"
-            elif data.get("downloadProgress"):
-                if data["downloadProgress"] == "Finished download":
+            if enable_media_sync or runningMediaSync is True:
+                if not data.get("initialMediaScanDone") or (
+                    data.get("initialMediaScanDone") and not data.get("mediaSyncRanOnce")
+                ):
+                    self._attr_native_value = "Starting"
+                    self._attr_icon = "mdi:sync"
+                elif not data.get("mediaSyncAvailable"):
+                    self._attr_native_value = "No Recordings Found"
+                    self._attr_icon = "mdi:sd"
+                elif data.get("downloadProgress"):
+                    if data["downloadProgress"] == "Finished download":
+                        self._attr_native_value = "Idle"
+                        self._attr_icon = "mdi:sd"
+                    else:
+                        self._attr_native_value = data["downloadProgress"]
+                        self._attr_icon = "mdi:sync"
+                else:
                     self._attr_native_value = "Idle"
                     self._attr_icon = "mdi:sd"
-                else:
-                    self._attr_native_value = data["downloadProgress"]
-                    self._attr_icon = "mdi:sync"
             else:
                 self._attr_native_value = "Idle"
                 self._attr_icon = "mdi:sd"
-        else:
-            self._attr_native_value = "Idle"
-            self._attr_icon = "mdi:sd"
 
-        attributes = {
-            "storage_mode": RECORDINGS_SOURCE_SD,
-            "sync_enabled": bool(enable_media_sync),
-            "media_sync_available": data.get("mediaSyncAvailable", True),
-            "download_progress": data.get("downloadProgress"),
-        }
+            attributes = {
+                "storage_mode": RECORDINGS_SOURCE_SD,
+                "sync_enabled": bool(enable_media_sync),
+                "media_sync_available": data.get("mediaSyncAvailable", True),
+                "download_progress": data.get("downloadProgress"),
+            }
+
         media_sync_hours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
         if media_sync_hours:
             attributes["retention_hours"] = media_sync_hours
@@ -483,7 +467,9 @@ class TapoSyncSensor(TapoSensorEntity):
                 dt_util.utc_from_timestamp(last_cleanup).isoformat()
             )
         attributes["last_deleted_recordings"] = data.get("lastDeletedRecordings", [])
-        attributes["total_deleted_count"] = data.get("totalDeletedCount", 0)
+        attributes["last_deleted_recordings_total"] = data.get(
+            "lastDeletedRecordingsTotal", 0
+        )
         attributes["last_cleanup_result"] = data.get(
             "lastCleanupResult", "No cleanup performed yet"
         )

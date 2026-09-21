@@ -436,13 +436,6 @@ async def findFilesNoLongerPresentInCamera(
     return expired_files, subdirs_to_check
 
 
-async def deleteFilesNoLongerPresentInCamera(
-    hass, entry_id, entryData, extension, folder
-):
-    found, _ = await findFilesNoLongerPresentInCamera(
-        hass, entry_id, entryData, extension, folder
-    )
-    return len(found), [f[0] for f in found]
 
 
 async def findColdFilesOlderThanMaxSyncTime(
@@ -627,13 +620,6 @@ async def findColdFilesOlderThanMaxSyncTime(
     return [], []
 
 
-async def deleteColdFilesOlderThanMaxSyncTime(
-    hass, entry, entryData, extension, folder
-):
-    found, _ = await findColdFilesOlderThanMaxSyncTime(
-        hass, entry, entryData, extension, folder
-    )
-    return len(found), [f[0] for f in found]
 
 
 def format_date_ha(hass, date_str: str) -> str:
@@ -847,9 +833,9 @@ async def mediaCleanup(hass, entry, deviceData):
         except Exception:
             local_today = datetime.datetime.now().date()
 
-        if deviceData.get("totalDeletedDate") != local_today:
-            deviceData["totalDeletedDate"] = local_today
-            deviceData["totalDeletedCount"] = 0
+        if deviceData.get("lastDeletedRecordingsDate") != local_today:
+            deviceData["lastDeletedRecordingsDate"] = local_today
+            deviceData["lastDeletedRecordingsTotal"] = 0
 
         if not unique_recordings:
             deviceData["lastCleanupResult"] = f"{sync_source} - Cleaned: No expired files"
@@ -888,7 +874,7 @@ async def mediaCleanup(hass, entry, deviceData):
 
                 await hass.async_add_executor_job(_delete_batch_files, batch)
 
-                deviceData["totalDeletedCount"] += len(batch)
+                deviceData["lastDeletedRecordingsTotal"] += len(batch)
                 deviceData["lastDeletedRecordings"] = format_deleted_recordings_list(
                     hass, batch, max_items=200
                 )

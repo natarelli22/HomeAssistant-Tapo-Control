@@ -3,7 +3,7 @@ from homeassistant.components.event import EventEntity, EventDeviceClass
 from homeassistant.core import callback
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN, LOGGER, BRAND
+from .const import DOMAIN, LOGGER
 from .utils import build_device_info
 
 
@@ -83,26 +83,6 @@ class TapoMotionEvent(EventEntity):
         self._last_state = bool(event.value) if event else False
         self._attr_enabled = event.entity_enabled if event else True
         LOGGER.debug("TapoMotionEvent - init - end")
-
-    @property
-    def name(self) -> str:
-        return self._attr_name
-
-    @property
-    def device_class(self) -> EventDeviceClass:
-        return self._attr_device_class
-
-    @property
-    def event_types(self) -> list[str]:
-        return self._attr_event_types
-
-    @property
-    def translation_key(self) -> Optional[str]:
-        return self._attr_translation_key
-
-    @property
-    def unique_id(self) -> str:
-        return self._attr_unique_id
 
     @property
     def entity_registry_enabled_default(self) -> bool:

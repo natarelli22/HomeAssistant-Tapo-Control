@@ -6,7 +6,6 @@ Integrates seamlessly with Home Assistant Media Browser and Advanced Camera Card
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
