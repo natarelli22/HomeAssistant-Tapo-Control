@@ -19,7 +19,7 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from homeassistant.util import dt
+from homeassistant.util import dt as dt_util, dt
 from homeassistant.components.media_source.error import Unresolvable
 import homeassistant.helpers.entity_registry
 
