@@ -19,7 +19,7 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
-from homeassistant.util import dt as dt_util, dt
+from homeassistant.util import dt
 from homeassistant.components.media_source.error import Unresolvable
 import homeassistant.helpers.entity_registry
 
@@ -1262,7 +1262,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     device["runningMediaSync"] = False
                     return
 
-                local_now = dt_util.now()
+                local_now = dt.now()
                 target_today = local_now.replace(
                     hour=target_hour, minute=target_minute, second=0, microsecond=0
                 )
@@ -1271,8 +1271,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 last_cleanup_date = None
                 if last_cleanup_ts:
                     try:
-                        last_cleanup_date = dt_util.as_local(
-                            dt_util.utc_from_timestamp(last_cleanup_ts)
+                        last_cleanup_date = dt.as_local(
+                            dt.utc_from_timestamp(last_cleanup_ts)
                         ).date()
                     except Exception:
                         last_cleanup_date = None
