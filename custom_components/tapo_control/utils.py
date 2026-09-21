@@ -716,6 +716,58 @@ def format_cleanup_summary(
     return f"{prefix}: {', '.join(parts)}"
 
 
+def format_recording_timestamp(hass, rec_name: str) -> str:
+    """Format a recording filename into a localized 'Date - HH:MM:SS' string."""
+    # 1. Tapo Care pattern: YYYY-MM-DD_HH-MM-SS or YYYY-MM-DD-HH-MM-SS
+    m = re.search(
+        r"(\d{4})[-_](\d{2})[-_](\d{2})[-_]+(\d{2})[-_](\d{2})[-_](\d{2})", rec_name
+    )
+    if m:
+        y, mo, d, h, mi, s = map(int, m.groups())
+        date_formatted = format_date_ha(hass, f"{y:04d}-{mo:02d}-{d:02d}")
+        return f"{date_formatted} - {h:02d}:{mi:02d}:{s:02d}"
+
+    # 2. SD card pattern: {startTS}-{endTS} or {childID}-{startTS}-{endTS}
+    sd_match = re.search(r"(\d{10})-(\d{10})", rec_name)
+    if sd_match:
+        try:
+            start_ts = int(sd_match.group(1))
+            dt_obj = dt_util.as_local(dt_util.utc_from_timestamp(start_ts))
+            date_formatted = format_date_ha(hass, dt_obj.strftime("%Y-%m-%d"))
+            time_formatted = dt_obj.strftime("%H:%M:%S")
+            return f"{date_formatted} - {time_formatted}"
+        except Exception:
+            pass
+
+    return rec_name
+
+
+def format_deleted_recordings_list(
+    hass, unique_recordings: list[str], max_items: int = 100
+) -> list[str]:
+    """Format deleted recordings into localized date-time strings, limited to max_items."""
+    formatted = [format_recording_timestamp(hass, rec) for rec in unique_recordings]
+    # Deduplicate while preserving order (in case mp4 and jpg or duplicates exist)
+    deduped = list(dict.fromkeys(formatted))
+
+    total = len(deduped)
+    if total <= max_items:
+        return deduped
+
+    lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
+    is_pt = lang.lower().startswith("pt")
+
+    remaining = total - max_items
+    if is_pt:
+        unit = "gravação" if remaining == 1 else "gravações"
+        more_msg = f"... e mais {remaining} {unit}"
+    else:
+        unit = "recording" if remaining == 1 else "recordings"
+        more_msg = f"... and {remaining} more {unit}"
+
+    return deduped[:max_items] + [more_msg]
+
+
 async def mediaCleanup(hass, entry, deviceData):
     entry_id = entry.entry_id
 
@@ -800,7 +852,9 @@ async def mediaCleanup(hass, entry, deviceData):
         unique_recordings = sorted(list(set(all_deleted_files)))
 
         deviceData["lastDeletedCount"] = total_deleted
-        deviceData["lastDeletedRecordings"] = unique_recordings
+        deviceData["lastDeletedRecordings"] = format_deleted_recordings_list(
+            hass, unique_recordings, max_items=100
+        )
 
         if total_deleted > 0:
             cleanup_summary = format_cleanup_summary(
