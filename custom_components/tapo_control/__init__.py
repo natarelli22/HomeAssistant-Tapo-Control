@@ -94,6 +94,7 @@ from .utils import (
     findMedia,
     getRecordings,
     scheduleAll,
+    warm_up_date_formatter,
 )
 from pytapo import Tapo
 from pytapo.version import PYTAPO_VERSION
@@ -597,6 +598,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     """Set up the Tapo: Cameras Control component from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+    await hass.async_add_executor_job(warm_up_date_formatter, hass)
 
     if "media_sync_source" in entry.data:
         new_data = {**entry.data}

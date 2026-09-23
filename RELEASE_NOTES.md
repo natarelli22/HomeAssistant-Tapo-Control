@@ -1,6 +1,6 @@
 ## O que mudou nesta versão
 
-* **Limpeza em Lotes (Batch Processing):** A rotina de limpeza agora processa arquivos expirados em blocos de até 200 gravações por ciclo (com pausa assíncrona de 2 segundos entre eles), aliviando o I/O de armazenamento e o event loop do Home Assistant.
-* **Atributo `Last deleted recordings total`:** Novo atributo no sensor `Recordings Synchronization` que acumula a quantidade total de gravações deletadas no dia, posicionado imediatamente após `Last deleted recordings`.
-* **Resultado Pontual em `Last cleanup result`:** Exibe o resultado e a contagem pontual da rodada de limpeza atual (sem misturar ou somar textos de rodadas anteriores).
-* **Remoção de Redundâncias:** Unificada a montagem dos atributos em `sensor.py` e eliminados códigos mortos e imports não utilizados em `utils.py`, `event.py` e `media_source.py`.
+* **Correção de Chamada Bloqueante no Event Loop (`asyncio`):** Resolvido o erro de `Detected blocking call to open` associado ao carregamento e leitura de dados de locale do Babel na thread principal do Home Assistant.
+* **Formatação de Datas 100% Dinâmica via Home Assistant:** As datas agora são formatadas dinamicamente pela biblioteca oficial de internacionalização do Home Assistant (Babel / Unicode CLDR) a partir de `hass.config.language` e `hass.config.country`, eliminando qualquer regra fixa (*hardcode*).
+* **Pré-aquecimento no Startup:** Inicialização e carregamento dos dados de locale executados em segundo plano via thread pool executor (`async_add_executor_job`) durante o `async_setup_entry`.
+* **Processamento Completo de Limpeza no Executor:** A rotina `mediaCleanup` agora executa a exclusão de arquivos e a formatação das listas de deletados e sumário em conjunto no executor de threads, mantendo o event loop 100% livre e responsivo.

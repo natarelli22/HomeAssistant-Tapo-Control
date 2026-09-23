@@ -622,34 +622,45 @@ async def findColdFilesOlderThanMaxSyncTime(
 
 
 
+def warm_up_date_formatter(hass) -> None:
+    """Pre-warm date formatting and locale cache inside executor thread."""
+    try:
+        import babel.dates
+        from datetime import date as dt_date
+
+        lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
+        country = getattr(getattr(hass, "config", None), "country", None)
+        locale_str = f"{lang.lower()}_{country.upper()}" if country else lang.replace("-", "_")
+        try:
+            babel.dates.format_date(dt_date.today(), format="short", locale=locale_str)
+        except Exception:
+            babel.dates.format_date(dt_date.today(), format="short", locale="en")
+    except Exception as err:
+        LOGGER.debug("Could not warm up date formatter: %s", err)
+
+
 def format_date_ha(hass, date_str: str) -> str:
-    """Format a date string (YYYY-MM-DD or YYYY_MM_DD) according to the Home Assistant language/locale."""
+    """Format a date string (YYYY-MM-DD or YYYY_MM_DD) dynamically according to the Home Assistant language/locale."""
     m = re.match(r"^(\d{4})[-_](\d{2})[-_](\d{2})", date_str)
     if not m:
         return date_str
 
     year, month, day = m.group(1), m.group(2), m.group(3)
     lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
-    lang = lang.lower()
+    country = getattr(getattr(hass, "config", None), "country", None)
+    locale_str = f"{lang.lower()}_{country.upper()}" if country else lang.replace("-", "_")
 
     try:
         import babel.dates
         from datetime import date as dt_date
 
         d_obj = dt_date(int(year), int(month), int(day))
-        locale_str = lang.replace("-", "_")
-        return babel.dates.format_date(d_obj, format="short", locale=locale_str)
+        try:
+            return babel.dates.format_date(d_obj, format="short", locale=locale_str)
+        except Exception:
+            return babel.dates.format_date(d_obj, format="short", locale="en")
     except Exception:
-        pass
-
-    if lang.startswith(("pt", "es", "fr", "it", "nl")) or lang == "en-gb":
-        return f"{day}/{month}/{year}"
-    elif lang.startswith("de"):
-        return f"{day}.{month}.{year}"
-    elif lang in ("en", "en-us"):
-        return f"{month}/{day}/{year}"
-    else:
-        return f"{day}/{month}/{year}"
+        return f"{year}-{month}-{day}"
 
 
 def format_cleanup_summary(
@@ -862,7 +873,7 @@ async def mediaCleanup(hass, entry, deviceData):
             downloaded_streams = deviceData.get("downloadedStreams", {})
 
             for idx, batch in enumerate(batches):
-                def _delete_batch_files(batch_stems):
+                def _process_batch_cleanup(batch_stems):
                     for stem in batch_stems:
                         downloaded_streams.pop(stem, None)
                         for f_path in expired_recordings.get(stem, []):
@@ -872,14 +883,18 @@ async def mediaCleanup(hass, entry, deviceData):
                             except OSError as err:
                                 LOGGER.error("Error removing %s: %s", f_path, err)
 
-                await hass.async_add_executor_job(_delete_batch_files, batch)
+                    formatted_list = format_deleted_recordings_list(
+                        hass, batch_stems, max_items=200
+                    )
+                    batch_sum = format_cleanup_summary(hass, sync_source, batch_stems)
+                    return formatted_list, batch_sum
 
-                deviceData["lastDeletedRecordingsTotal"] += len(batch)
-                deviceData["lastDeletedRecordings"] = format_deleted_recordings_list(
-                    hass, batch, max_items=200
+                formatted_recordings, batch_summary = (
+                    await hass.async_add_executor_job(_process_batch_cleanup, batch)
                 )
 
-                batch_summary = format_cleanup_summary(hass, sync_source, batch)
+                deviceData["lastDeletedRecordingsTotal"] += len(batch)
+                deviceData["lastDeletedRecordings"] = formatted_recordings
                 deviceData["lastCleanupResult"] = batch_summary
 
                 LOGGER.debug(
