@@ -59,6 +59,15 @@ from .const import (
     SOUND_DETECTION_RESET,
     HAS_STREAM_6,
     HAS_STREAM_7,
+    SD_DOWNLOAD_METHOD,
+    SD_DOWNLOAD_METHOD_LEGACY,
+    SD_DOWNLOAD_METHOD_FAST,
+    SD_SYNC_RECORDING_TYPES,
+    SD_SYNC_RECORDING_TYPES_BOTH,
+    SD_SYNC_RECORDING_TYPES_EVENTS,
+    SD_SYNC_RECORDING_TYPES_CONTINUOUS,
+    SUBDIR_EVENTS,
+    SUBDIR_CONTINUOUS,
     TIME_SYNC_DST,
     TIME_SYNC_DST_DEFAULT,
     TIME_SYNC_NDST,
@@ -80,6 +89,7 @@ from .utils import (
     getEntryStorageFile,
     getHotDirPathForEntry,
     getIP,
+    get_recording_subfolder,
     isUsingHTTPS,
     mediaCleanup,
     registerController,
@@ -1351,57 +1361,128 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                     searchResult[key]["date"],
                                 )
                                 LOGGER.debug("getRecordings -2")
-                                totalRecordingsToDownload = 0
-                                for recording in recordingsForDay:
-                                    for recordingKey in recording:
-                                        if recording[recordingKey]["endTime"] > int(
-                                            ts
-                                        ) - (int(mediaSyncTime)):
-                                            totalRecordingsToDownload += 1
-                                recordingCount = 0
-                                for recording in recordingsForDay:
-                                    for recordingKey in recording:
-                                        if recording[recordingKey]["endTime"] > (
-                                            int(ts) - (int(mediaSyncTime))
-                                        ):
-                                            recordingCount += 1
-                                            try:
-                                                enableMediaSync = device[
-                                                    ENABLE_MEDIA_SYNC
-                                                ]
-                                                if enableMediaSync:
-                                                    LOGGER.debug("getRecording -1")
-                                                    await getRecording(
-                                                        hass,
-                                                        tapoController,
-                                                        entry.entry_id,
-                                                        device,
-                                                        searchResult[key]["date"],
-                                                        recording[recordingKey][
-                                                            "startTime"
-                                                        ],
-                                                        recording[recordingKey][
-                                                            "endTime"
-                                                        ],
-                                                        recordingCount,
-                                                        totalRecordingsToDownload,
-                                                    )
-                                                    LOGGER.debug("getRecording -2")
+                                entry_download_method = entry.data.get(
+                                    SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+                                )
+                                if entry_download_method == SD_DOWNLOAD_METHOD_FAST:
+                                    sd_sync_type = entry.data.get(
+                                        SD_SYNC_RECORDING_TYPES,
+                                        SD_SYNC_RECORDING_TYPES_BOTH,
+                                    )
+                                    events_items = []
+                                    continuous_items = []
+                                    for recording in recordingsForDay:
+                                        for recordingKey in recording:
+                                            rec_data = recording[recordingKey]
+                                            if rec_data["endTime"] > int(ts) - int(mediaSyncTime):
+                                                sf = get_recording_subfolder(rec_data)
+                                                if sf == SUBDIR_CONTINUOUS:
+                                                    continuous_items.append((recording, recordingKey, sf))
                                                 else:
-                                                    LOGGER.debug(
-                                                        f"Media sync disabled (inside getRecording): {enableMediaSync}"
-                                                    )
-                                            except Unresolvable as err:
-                                                if (
-                                                    str(err)
-                                                    == "Recording is currently in progress."
-                                                ):
-                                                    LOGGER.info(err)
-                                                else:
-                                                    LOGGER.warning(err)
-                                            except Exception as err:
-                                                device["runningMediaSync"] = False
-                                                LOGGER.error(err)
+                                                    events_items.append((recording, recordingKey, sf))
+
+                                    if sd_sync_type == SD_SYNC_RECORDING_TYPES_EVENTS:
+                                        items_to_download = events_items
+                                    elif sd_sync_type == SD_SYNC_RECORDING_TYPES_CONTINUOUS:
+                                        items_to_download = continuous_items
+                                    else:
+                                        # SD_SYNC_RECORDING_TYPES_BOTH: events first, then continuous
+                                        items_to_download = events_items + continuous_items
+
+                                    totalRecordingsToDownload = len(items_to_download)
+                                    recordingCount = 0
+                                    for recording, recordingKey, subf in items_to_download:
+                                        recordingCount += 1
+                                        try:
+                                            enableMediaSync = device[
+                                                ENABLE_MEDIA_SYNC
+                                            ]
+                                            if enableMediaSync:
+                                                LOGGER.debug("getRecording -1")
+                                                await getRecording(
+                                                    hass,
+                                                    tapoController,
+                                                    entry.entry_id,
+                                                    device,
+                                                    searchResult[key]["date"],
+                                                    recording[recordingKey][
+                                                        "startTime"
+                                                    ],
+                                                    recording[recordingKey][
+                                                        "endTime"
+                                                    ],
+                                                    recordingCount,
+                                                    totalRecordingsToDownload,
+                                                    subfolder=subf,
+                                                )
+                                                LOGGER.debug("getRecording -2")
+                                            else:
+                                                LOGGER.debug(
+                                                    f"Media sync disabled (inside getRecording): {enableMediaSync}"
+                                                )
+                                        except Unresolvable as err:
+                                            if (
+                                                str(err)
+                                                == "Recording is currently in progress."
+                                            ):
+                                                LOGGER.info(err)
+                                            else:
+                                                LOGGER.warning(err)
+                                        except Exception as err:
+                                            device["runningMediaSync"] = False
+                                            LOGGER.error(err)
+                                else:
+                                    totalRecordingsToDownload = 0
+                                    for recording in recordingsForDay:
+                                        for recordingKey in recording:
+                                            if recording[recordingKey]["endTime"] > int(
+                                                ts
+                                            ) - (int(mediaSyncTime)):
+                                                totalRecordingsToDownload += 1
+                                    recordingCount = 0
+                                    for recording in recordingsForDay:
+                                        for recordingKey in recording:
+                                            if recording[recordingKey]["endTime"] > (
+                                                int(ts) - (int(mediaSyncTime))
+                                            ):
+                                                recordingCount += 1
+                                                try:
+                                                    enableMediaSync = device[
+                                                        ENABLE_MEDIA_SYNC
+                                                    ]
+                                                    if enableMediaSync:
+                                                        LOGGER.debug("getRecording -1")
+                                                        await getRecording(
+                                                            hass,
+                                                            tapoController,
+                                                            entry.entry_id,
+                                                            device,
+                                                            searchResult[key]["date"],
+                                                            recording[recordingKey][
+                                                                "startTime"
+                                                            ],
+                                                            recording[recordingKey][
+                                                                "endTime"
+                                                            ],
+                                                            recordingCount,
+                                                            totalRecordingsToDownload,
+                                                        )
+                                                        LOGGER.debug("getRecording -2")
+                                                    else:
+                                                        LOGGER.debug(
+                                                            f"Media sync disabled (inside getRecording): {enableMediaSync}"
+                                                        )
+                                                except Unresolvable as err:
+                                                    if (
+                                                        str(err)
+                                                        == "Recording is currently in progress."
+                                                    ):
+                                                        LOGGER.info(err)
+                                                    else:
+                                                        LOGGER.warning(err)
+                                                except Exception as err:
+                                                    device["runningMediaSync"] = False
+                                                    LOGGER.error(err)
                             else:
                                 LOGGER.debug(
                                     f"Media sync ignoring {searchResult[key]["date"]}. Media sync: {enableMediaSync}."

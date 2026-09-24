@@ -53,7 +53,11 @@ from .const import (
     MEDIA_VIEW_RECORDINGS_ORDER_OPTIONS,
     SD_DOWNLOAD_METHOD,
     SD_DOWNLOAD_METHOD_LEGACY,
+    SD_DOWNLOAD_METHOD_FAST,
     SD_DOWNLOAD_METHOD_OPTIONS,
+    SD_SYNC_RECORDING_TYPES,
+    SD_SYNC_RECORDING_TYPES_BOTH,
+    SD_SYNC_RECORDING_TYPES_OPTIONS,
     REPORTED_IP_ADDRESS,
     DOORBELL_UDP_DISCOVERED,
     SOUND_DETECTION_DURATION,
@@ -1603,6 +1607,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
                     )
 
+                    if user_input.get(SD_DOWNLOAD_METHOD) == SD_DOWNLOAD_METHOD_FAST:
+                        self._temp_media_sd_data = allConfigData
+                        return await self.async_step_media_sd_fast_options()
+
                     self.hass.config_entries.async_update_entry(
                         self.config_entry,
                         data=allConfigData,
@@ -1648,6 +1656,40 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         SD_DOWNLOAD_METHOD,
                         description={"suggested_value": sd_download_method},
                     ): vol.In(SD_DOWNLOAD_METHOD_OPTIONS),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_media_sd_fast_options(self, user_input=None):
+        """Configure recording types for fast download mode."""
+        errors = {}
+        all_config = getattr(self, "_temp_media_sd_data", None)
+        if all_config is None:
+            all_config = {**self.config_entry.data}
+
+        current_sync_type = self.config_entry.data.get(
+            SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
+        )
+
+        if user_input is not None:
+            all_config[SD_SYNC_RECORDING_TYPES] = user_input.get(
+                SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
+            )
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data=all_config,
+            )
+            return self.async_create_entry(title="", data=None)
+
+        return self.async_show_form(
+            step_id="media_sd_fast_options",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        SD_SYNC_RECORDING_TYPES,
+                        description={"suggested_value": current_sync_type},
+                    ): vol.In(SD_SYNC_RECORDING_TYPES_OPTIONS),
                 }
             ),
             errors=errors,

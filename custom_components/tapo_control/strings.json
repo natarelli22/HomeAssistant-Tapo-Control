@@ -128,6 +128,13 @@
         },
         "description": "Modify settings of recordings media synchronization from camera SD Card.\n\nRecordings are stored in the Home Assistant config folder by default (.storage/tapo_control) which is included in backups and can grow quickly. Set a Cold storage path outside of your config (for example /media/tapo_control) to avoid bloating backups.\nLeave empty to use default Home Assistant storage."
       },
+      "media_sd_fast_options": {
+        "title": "Fast Download Options",
+        "data": {
+          "sd_sync_recording_types": "Recordings to synchronize"
+        },
+        "description": "Select which recording types to download from the SD card using the fast protocol.\n\n• Both (Events first, then Continuous): Downloads detection events first in seconds, then fills in continuous recordings.\n• Detection Events only: Fast downloads only when motion/person was detected (30s-2min clips).\n• Continuous Recording only: Downloads only 30-minute scheduled recording blocks."
+      },
       "media_tapo_care": {
         "title": "Media Synchronization (Tapo Care)",
         "data": {

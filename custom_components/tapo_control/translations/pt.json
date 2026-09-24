@@ -91,6 +91,13 @@
         },
         "description": "Modificar definições de sincronização de gravações do Cartão SD.\n\nAs gravações são armazenadas na pasta de configuração do Home Assistant por padrão (.storage/tapo_control), o que é incluído nas cópias de segurança e pode crescer rapidamente. Defina um caminho de cold storage fora da sua configuração (por exemplo /media/tapo_control) para evitar cópias de segurança pesadas.\nDeixe em branco para utilizar o armazenamento padrão."
       },
+      "media_sd_fast_options": {
+        "title": "Opções do Fast Download",
+        "data": {
+          "sd_sync_recording_types": "Gravações a sincronizar"
+        },
+        "description": "Selecione quais tipos de gravação descarregar do cartão SD usando o protocolo rápido.\n\n• Ambos (Eventos primeiro, depois Contínua): Descarrega eventos de deteção primeiro em segundos e preenche a gravação contínua em segundo plano.\n• Apenas Eventos de Deteção: Descarrega apenas quando houve movimento/pessoa detetada (clipes de 30s a 2min).\n• Apenas Gravação Contínua: Descarrega apenas os blocos agendados de 30 minutos."
+      },
       "media_tapo_care": {
         "title": "Sincronização de Multimédia (Tapo Care)",
         "data": {

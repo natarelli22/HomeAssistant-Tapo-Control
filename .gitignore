@@ -3,3 +3,4 @@ custom_components/tapo_control/tapo/__pycache__/
 custom_components/tapo_control/pytapo/*
 graphify-out/
 .agents/
+scratch/

@@ -57,12 +57,25 @@ from .const import (
     RECORDINGS_SOURCE_TAPO_CARE,
     MEDIA_VIEW_DAYS_ORDER,
     MEDIA_VIEW_RECORDINGS_ORDER,
+    SD_DOWNLOAD_METHOD,
+    SD_DOWNLOAD_METHOD_LEGACY,
+    SD_DOWNLOAD_METHOD_FAST,
+    SD_SYNC_RECORDING_TYPES,
+    SD_SYNC_RECORDING_TYPES_BOTH,
+    SD_SYNC_RECORDING_TYPES_EVENTS,
+    SD_SYNC_RECORDING_TYPES_CONTINUOUS,
+    SUBDIR_EVENTS,
+    SUBDIR_CONTINUOUS,
 )
 from .utils import (
     getColdDirPathForEntry,
     getHotDirPathForEntry,
     getDataPath,
     format_date_ha,
+    getColdFile,
+    getFileName,
+    getRecording,
+    get_recording_subfolder,
 )
 
 
@@ -435,6 +448,8 @@ class TapoMediaSource(MediaSource):
         candidates = [
             thumbs_dir / date / f"{stem}.jpg",
             thumbs_dir / f"{stem}.jpg",
+            thumbs_dir / SUBDIR_EVENTS / f"{stem}.jpg",
+            thumbs_dir / SUBDIR_CONTINUOUS / f"{stem}.jpg",
             video_file.parent / f"{stem}.jpg",
             thumbs_dir / date.replace("_", "-") / f"{stem}.jpg",
             thumbs_dir / date.replace("-", "_") / f"{stem}.jpg",
@@ -454,6 +469,8 @@ class TapoMediaSource(MediaSource):
         stem_prefix = stem.rsplit("_", 1)[0]
         search_dirs = [
             thumbs_dir / date,
+            thumbs_dir / SUBDIR_EVENTS,
+            thumbs_dir / SUBDIR_CONTINUOUS,
             thumbs_dir / date.replace("_", "-"),
             thumbs_dir / date.replace("-", "_"),
             thumbs_dir,
@@ -568,6 +585,30 @@ class TapoMediaSource(MediaSource):
                         vids = [f for f in sub.glob("*.mp4") if f.is_file() and f.stat().st_size > 0]
                         if vids:
                             dates_map.setdefault(d_norm, []).extend(vids)
+                    elif sub.name in (SUBDIR_EVENTS, SUBDIR_CONTINUOUS):
+                        for f in sub.glob("*.mp4"):
+                            if f.is_file() and f.stat().st_size > 0:
+                                stem = f.stem
+                                m = re.match(r"^(\d{4}[-_]\d{2}[-_]\d{2})", stem)
+                                if m:
+                                    d = m.group(1).replace("_", "-")
+                                    dates_map.setdefault(d, []).append(f)
+                                else:
+                                    m_unix = re.search(r"(\d{10})-\d{10}", stem)
+                                    if m_unix:
+                                        try:
+                                            d = datetime.fromtimestamp(int(m_unix.group(1))).strftime("%Y-%m-%d")
+                                            dates_map.setdefault(d, []).append(f)
+                                        except Exception:
+                                            pass
+                        for subsub in sub.iterdir():
+                            if subsub.is_dir():
+                                date_match_sub = re.match(r"^\d{4}[-_]\d{2}[-_]\d{2}$", subsub.name)
+                                if date_match_sub:
+                                    d_norm = subsub.name.replace("_", "-")
+                                    vids = [f for f in subsub.glob("*.mp4") if f.is_file() and f.stat().st_size > 0]
+                                    if vids:
+                                        dates_map.setdefault(d_norm, []).extend(vids)
         except OSError:
             pass
 
@@ -742,6 +783,30 @@ class TapoMediaSource(MediaSource):
 
         dates_map = self._get_camera_dates(camera_path) if camera_path else {}
 
+        # In Fast Download mode, ensure all SD card recording dates are displayed even before downloading
+        if entry_id and entry_id in self.hass.data.get(DOMAIN, {}):
+            entry_data = self.hass.data[DOMAIN][entry_id]
+            config_entry = entry_data.get("entry")
+            download_method = (
+                config_entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+                if config_entry
+                else SD_DOWNLOAD_METHOD_LEGACY
+            )
+            if download_method == SD_DOWNLOAD_METHOD_FAST and "controller" in entry_data:
+                try:
+                    tapo_controller = entry_data["controller"]
+                    rec_list = tapo_controller.getRecordingsList()
+                    if rec_list:
+                        for search_res in rec_list:
+                            for k in search_res:
+                                date_val = search_res[k].get("date")
+                                if date_val and len(date_val) == 8:
+                                    d_norm = f"{date_val[:4]}-{date_val[4:6]}-{date_val[6:8]}"
+                                    if d_norm not in dates_map:
+                                        dates_map[d_norm] = []
+                except Exception as err:
+                    LOGGER.debug("Could not query camera recordings list for dates: %s", err)
+
         media_view_days_order = "Descending"
         if self.entry:
             media_view_days_order = self.entry.data.get(
@@ -787,16 +852,13 @@ class TapoMediaSource(MediaSource):
     ) -> BrowseMediaSource:
         """List video clips for a specific date."""
         entry_id = query.get("entry")
-        if entry_id and entry_id in self.hass.data.get(DOMAIN, {}):
-            entry_data = self.hass.data[DOMAIN][entry_id]
-            config_entry = entry_data.get("entry")
-            sync_source = (
-                config_entry.data.get(
-                    RECORDINGS_SOURCE,
-                    config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
-                )
-                if config_entry
-                else RECORDINGS_SOURCE_SD
+        entry_data = self.hass.data.get(DOMAIN, {}).get(entry_id, {}) if entry_id else {}
+        config_entry = entry_data.get("entry") if entry_data else None
+
+        if config_entry:
+            sync_source = config_entry.data.get(
+                RECORDINGS_SOURCE,
+                config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
             )
             if sync_source == RECORDINGS_SOURCE_TAPO_CARE and not entry_data.get(
                 ENABLE_MEDIA_SYNC, False
@@ -818,6 +880,257 @@ class TapoMediaSource(MediaSource):
                     camera_path = Path(cameras[camera]["path"])
 
         dates_map = self._get_camera_dates(camera_path) if camera_path else {}
+
+        download_method = (
+            config_entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+            if config_entry
+            else SD_DOWNLOAD_METHOD_LEGACY
+        )
+
+        # -------------------------------------------------------------
+        # FAST DOWNLOAD MODE: Segmented categories & Direct SD Browsing
+        # -------------------------------------------------------------
+        if download_method == SD_DOWNLOAD_METHOD_FAST:
+            sd_sync_type = (
+                config_entry.data.get(
+                    SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
+                )
+                if config_entry
+                else SD_SYNC_RECORDING_TYPES_BOTH
+            )
+            category = query.get("category")
+
+            # If user configured 'both' and hasn't clicked a category yet, show subfolders
+            if sd_sync_type == SD_SYNC_RECORDING_TYPES_BOTH and not category:
+                events_params = {
+                    **query,
+                    "camera": camera,
+                    "camera_path": str(camera_path) if camera_path else "",
+                    "date": date,
+                    "category": SUBDIR_EVENTS,
+                    "title": "Detection Events",
+                }
+                continuous_params = {
+                    **query,
+                    "camera": camera,
+                    "camera_path": str(camera_path) if camera_path else "",
+                    "date": date,
+                    "category": SUBDIR_CONTINUOUS,
+                    "title": "Continuous Recording",
+                }
+                children = [
+                    self.generate_view(
+                        identifier=build_identifier(events_params),
+                        title="Detection Events",
+                        can_play=False,
+                        can_expand=True,
+                    ),
+                    self.generate_view(
+                        identifier=build_identifier(continuous_params),
+                        title="Continuous Recording",
+                        can_play=False,
+                        can_expand=True,
+                    ),
+                ]
+                date_title = query.get("title") or self._format_date_title(date)
+                return self.generate_view(
+                    identifier=build_identifier(query),
+                    title=date_title,
+                    can_play=False,
+                    can_expand=True,
+                    children=children,
+                )
+
+            # Determine target category
+            if category:
+                target_category = category
+            elif sd_sync_type == SD_SYNC_RECORDING_TYPES_CONTINUOUS:
+                target_category = SUBDIR_CONTINUOUS
+            else:
+                target_category = SUBDIR_EVENTS
+
+            child_id = query.get("childID", "")
+            if not child_id and entry_data and entry_data.get("isChild"):
+                child_id = entry_data.get("camData", {}).get("basic_info", {}).get("dev_id", "")
+
+            seen_items: set[tuple[int, int]] = set()
+            items_list: list[dict[str, Any]] = []
+
+            # 1. Query recordings directly from camera SD card if controller is available
+            if entry_data and "controller" in entry_data:
+                try:
+                    tapo_controller = entry_data["controller"]
+                    date_api = date.replace("-", "").replace("_", "")
+                    cam_recs = tapo_controller.getRecordings(date_api) or []
+                    for rec_group in cam_recs:
+                        for rec_key, rec_data in rec_group.items():
+                            st = rec_data.get("startTime")
+                            et = rec_data.get("endTime")
+                            if st is None or et is None:
+                                continue
+                            rec_subf = get_recording_subfolder(rec_data)
+                            if rec_subf != target_category:
+                                continue
+
+                            key = (int(st), int(et))
+                            if key in seen_items:
+                                continue
+                            seen_items.add(key)
+
+                            cold_video_path = getColdFile(
+                                self.hass,
+                                entry_id,
+                                int(st),
+                                int(et),
+                                "videos",
+                                childID=child_id,
+                                subfolder=rec_subf,
+                            )
+                            is_downloaded = os.path.exists(cold_video_path)
+                            if is_downloaded:
+                                title = format_video_title(cold_video_path)
+                                thumb_file = (
+                                    self._find_thumbnail(camera_path, date, Path(cold_video_path))
+                                    if camera_path
+                                    else None
+                                )
+                            else:
+                                dt_start = datetime.fromtimestamp(int(st))
+                                dt_end = datetime.fromtimestamp(int(et))
+                                title = f"{dt_start.strftime('%H:%M:%S')} - {dt_end.strftime('%H:%M:%S')}"
+                                cold_thumb_path = getColdFile(
+                                    self.hass,
+                                    entry_id,
+                                    int(st),
+                                    int(et),
+                                    "thumbs",
+                                    childID=child_id,
+                                    subfolder=rec_subf,
+                                )
+                                thumb_file = (
+                                    Path(cold_thumb_path)
+                                    if os.path.exists(cold_thumb_path)
+                                    else None
+                                )
+
+                            thumb_url = self._get_thumbnail_url(thumb_file) if thumb_file else None
+
+                            vid_params = {
+                                **query,
+                                "camera": camera,
+                                "camera_path": str(camera_path) if camera_path else "",
+                                "date": date,
+                                "category": target_category,
+                                "subfolder": target_category,
+                                "startDate": str(st),
+                                "endDate": str(et),
+                                "duration": str(max(1, int(et) - int(st))),
+                                "title": title,
+                                "file": Path(cold_video_path).name,
+                                "video_path": str(cold_video_path),
+                            }
+                            if entry_id:
+                                vid_params["entry"] = entry_id
+                            if child_id:
+                                vid_params["childID"] = child_id
+
+                            items_list.append({
+                                "params": vid_params,
+                                "title": title,
+                                "thumb_url": thumb_url,
+                                "startDate": int(st),
+                            })
+                except Exception as err:
+                    LOGGER.debug("Could not query camera recordings for %s: %s", date, err)
+
+            # 2. Check local disk files for this date
+            local_files = dates_map.get(date, [])
+            tz_name = getattr(self.hass.config, "time_zone", None) or "UTC"
+            for f in local_files:
+                file_subf = None
+                if f.parent.name in (SUBDIR_EVENTS, SUBDIR_CONTINUOUS):
+                    file_subf = f.parent.name
+                elif f.parent.parent.name in (SUBDIR_EVENTS, SUBDIR_CONTINUOUS):
+                    file_subf = f.parent.parent.name
+
+                if file_subf and file_subf != target_category:
+                    continue
+
+                st, et = get_video_timestamps(f, date, tz_name)
+                key = (int(st), int(et))
+                if key in seen_items:
+                    continue
+                seen_items.add(key)
+
+                title = format_video_title(f)
+                thumb_file = self._find_thumbnail(camera_path, date, f) if camera_path else None
+                thumb_url = self._get_thumbnail_url(thumb_file) if thumb_file else None
+
+                vid_params = {
+                    **query,
+                    "camera": camera,
+                    "camera_path": str(camera_path) if camera_path else "",
+                    "date": date,
+                    "category": target_category,
+                    "subfolder": target_category,
+                    "video_path": str(f),
+                    "file": f.name,
+                    "title": title,
+                    "startDate": str(st),
+                    "endDate": str(et),
+                    "duration": str(max(1, et - st)),
+                }
+                if entry_id:
+                    vid_params["entry"] = entry_id
+                if child_id:
+                    vid_params["childID"] = child_id
+
+                items_list.append({
+                    "params": vid_params,
+                    "title": title,
+                    "thumb_url": thumb_url,
+                    "startDate": int(st),
+                })
+
+            media_view_recordings_order = "Ascending"
+            if self.entry:
+                media_view_recordings_order = self.entry.data.get(
+                    MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
+                )
+
+            items_list.sort(
+                key=lambda x: x["startDate"],
+                reverse=(media_view_recordings_order == "Descending"),
+            )
+
+            video_children = [
+                self.generate_view(
+                    identifier=build_identifier(item["params"]),
+                    title=item["title"],
+                    can_play=True,
+                    can_expand=False,
+                    thumbnail=item["thumb_url"],
+                )
+                for item in items_list
+            ]
+
+            title_suffix = "Detection Events" if target_category == SUBDIR_EVENTS else "Continuous Recording"
+            if sd_sync_type == SD_SYNC_RECORDING_TYPES_BOTH:
+                category_title = f"{self._format_date_title(date)} - {title_suffix}"
+            else:
+                category_title = self._format_date_title(date)
+
+            return self.generate_view(
+                identifier=build_identifier(query),
+                title=query.get("title", category_title),
+                can_play=False,
+                can_expand=True,
+                children=video_children,
+            )
+
+        # -------------------------------------------------------------
+        # LEGACY MODE (Playback): 100% UNCHANGED
+        # -------------------------------------------------------------
         files = dates_map.get(date, [])
 
         media_view_recordings_order = "Ascending"
@@ -833,7 +1146,7 @@ class TapoMediaSource(MediaSource):
 
         tz_name = getattr(self.hass.config, "time_zone", None) or "UTC"
 
-        video_children: list[BrowseMediaSource] = []
+        video_children = []
         for f in files:
             title = format_video_title(f)
             thumb_file = self._find_thumbnail(camera_path, date, f) if camera_path else None
@@ -893,6 +1206,7 @@ class TapoMediaSource(MediaSource):
         date = query.get("date")
         file = query.get("file")
 
+        file_path: Path | None = None
         if video_path_str:
             file_path = Path(video_path_str)
         else:
@@ -906,11 +1220,17 @@ class TapoMediaSource(MediaSource):
 
             if cam_path and file:
                 file_path = cam_path / "videos" / date / file if date else cam_path / "videos" / file
-            else:
-                file_path = Path("")
+
+        # Check if file actually exists on disk
+        file_exists = False
+        if file_path and str(file_path) not in ("", "."):
+            try:
+                file_exists = file_path.exists()
+            except OSError:
+                file_exists = False
 
         # If the file is not found at exact path, search recursively inside cam_path
-        if not file_path.exists() and file:
+        if not file_exists and file:
             cam_path = None
             if entry_id:
                 cam_path = Path(getColdDirPathForEntry(self.hass, entry_id))
@@ -923,8 +1243,60 @@ class TapoMediaSource(MediaSource):
                 matches = list(cam_path.glob(f"**/{file}"))
                 if matches and matches[0].exists():
                     file_path = matches[0]
+                    file_exists = True
 
-        if not file_path.exists():
+        # If still not found, check if Fast download can retrieve it on-demand from the camera SD card
+        if not file_exists:
+            start_date = query.get("startDate")
+            end_date = query.get("endDate")
+            subfolder = query.get("subfolder") or query.get("category")
+            config_entry = (
+                self.hass.config_entries.async_get_entry(entry_id) if entry_id else None
+            )
+            dl_method = (
+                config_entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+                if config_entry
+                else SD_DOWNLOAD_METHOD_LEGACY
+            )
+
+            if (
+                dl_method == SD_DOWNLOAD_METHOD_FAST
+                and start_date
+                and end_date
+                and entry_id in self.hass.data.get(DOMAIN, {})
+            ):
+                entry_data = self.hass.data[DOMAIN][entry_id]
+                controller = entry_data.get("controller")
+                if controller:
+                    d_api = (date or "").replace("-", "").replace("_", "")
+                    if not d_api:
+                        try:
+                            d_api = datetime.fromtimestamp(int(start_date)).strftime("%Y%m%d")
+                        except Exception:
+                            d_api = ""
+                    try:
+                        LOGGER.info(
+                            "On-demand fast downloading recording %s-%s for playback...",
+                            start_date,
+                            end_date,
+                        )
+                        downloaded_path = await getRecording(
+                            self.hass,
+                            controller,
+                            entry_id,
+                            entry_data,
+                            d_api,
+                            int(start_date),
+                            int(end_date),
+                            subfolder=subfolder,
+                        )
+                        if downloaded_path and os.path.exists(downloaded_path):
+                            file_path = Path(downloaded_path)
+                            file_exists = True
+                    except Exception as err:
+                        LOGGER.error("Failed to download recording on demand: %s", err)
+
+        if not file_exists or not file_path:
             raise Unresolvable(f"File not found: {file_path}")
 
         resolved_file = file_path.resolve()

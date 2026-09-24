@@ -67,6 +67,8 @@ from .const import (
     SD_DOWNLOAD_METHOD,
     SD_DOWNLOAD_METHOD_LEGACY,
     SD_DOWNLOAD_METHOD_FAST,
+    SUBDIR_EVENTS,
+    SUBDIR_CONTINUOUS,
     TIME_SYNC_DST,
     TIME_SYNC_NDST,
     TPLINK_DOMAIN,
@@ -339,7 +341,12 @@ async def findMedia(hass, entryData, entry):
 
 
 async def processDownload(
-    hass, entry_id: int, entryData: dict, startDate: int, endDate: int
+    hass,
+    entry_id: int,
+    entryData: dict,
+    startDate: int,
+    endDate: int,
+    subfolder: str | None = None,
 ):
     childID = ""
     if entryData["isChild"]:
@@ -347,7 +354,13 @@ async def processDownload(
     filePath = getFileName(startDate, endDate, False, childID=childID)
 
     coldFilePath = getColdFile(
-        hass, entry_id, startDate, endDate, "videos", childID=childID
+        hass,
+        entry_id,
+        startDate,
+        endDate,
+        "videos",
+        childID=childID,
+        subfolder=subfolder,
     )
 
     if not os.path.exists(coldFilePath):
@@ -364,16 +377,37 @@ async def processDownload(
     if mediaScanName not in entryData["mediaScanResult"]:
         entryData["mediaScanResult"][mediaScanName] = True
 
-    await generateThumb(hass, entry_id, startDate, endDate, childID=childID)
+    await generateThumb(
+        hass, entry_id, startDate, endDate, childID=childID, subfolder=subfolder
+    )
 
 
-async def generateThumb(hass, entry_id, startDate: int, endDate: int, childID=""):
+async def generateThumb(
+    hass,
+    entry_id,
+    startDate: int,
+    endDate: int,
+    childID="",
+    subfolder: str | None = None,
+):
     filePathThumb = getColdFile(
-        hass, entry_id, startDate, endDate, "thumbs", childID=childID
+        hass,
+        entry_id,
+        startDate,
+        endDate,
+        "thumbs",
+        childID=childID,
+        subfolder=subfolder,
     )
     if not os.path.exists(filePathThumb):
         filePathVideo = getColdFile(
-            hass, entry_id, startDate, endDate, "videos", childID=childID
+            hass,
+            entry_id,
+            startDate,
+            endDate,
+            "videos",
+            childID=childID,
+            subfolder=subfolder,
         )
         _ffmpeg = hass.data[DATA_FFMPEG]
         ffmpeg = ImageFrame(_ffmpeg.binary)
@@ -383,6 +417,7 @@ async def generateThumb(hass, entry_id, startDate: int, endDate: int, childID=""
                 output_format=IMAGE_JPEG,
             )
         )
+        os.makedirs(os.path.dirname(filePathThumb), exist_ok=True)
         openHandler = await hass.async_add_executor_job(open, filePathThumb, "wb")
         with openHandler as binary_file:
             binary_file.write(image)
@@ -626,15 +661,43 @@ async def findColdFilesOlderThanMaxSyncTime(
 
 
 
+def resolve_ha_locale(hass) -> str:
+    """Resolve a valid babel locale string from Home Assistant configuration."""
+    lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
+    country = getattr(getattr(hass, "config", None), "country", None)
+    tz = getattr(getattr(hass, "config", None), "time_zone", "") or ""
+
+    lang_clean = str(lang).strip().lower()
+    country_clean = str(country).strip().upper() if country else ""
+    tz_clean = str(tz).strip().lower()
+
+    if "pt" in lang_clean or country_clean == "BR" or "sao_paulo" in tz_clean or "brasilia" in tz_clean:
+        return "pt_PT" if country_clean == "PT" else "pt_BR"
+
+    base_lang = lang_clean.split("-")[0].split("_")[0] if lang_clean else "en"
+    if country_clean:
+        cand = f"{base_lang}_{country_clean}"
+        try:
+            import babel
+            babel.Locale.parse(cand)
+            return cand
+        except Exception:
+            pass
+    try:
+        import babel
+        babel.Locale.parse(base_lang)
+        return base_lang
+    except Exception:
+        return "en"
+
+
 def warm_up_date_formatter(hass) -> None:
     """Pre-warm date formatting and locale cache inside executor thread."""
     try:
         import babel.dates
         from datetime import date as dt_date
 
-        lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
-        country = getattr(getattr(hass, "config", None), "country", None)
-        locale_str = f"{lang.lower()}_{country.upper()}" if country else lang.replace("-", "_")
+        locale_str = resolve_ha_locale(hass)
         try:
             babel.dates.format_date(dt_date.today(), format="short", locale=locale_str)
         except Exception:
@@ -650,9 +713,7 @@ def format_date_ha(hass, date_str: str) -> str:
         return date_str
 
     year, month, day = m.group(1), m.group(2), m.group(3)
-    lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
-    country = getattr(getattr(hass, "config", None), "country", None)
-    locale_str = f"{lang.lower()}_{country.upper()}" if country else lang.replace("-", "_")
+    locale_str = resolve_ha_locale(hass)
 
     try:
         import babel.dates
@@ -1053,6 +1114,19 @@ def getFileName(startDate: int, endDate: int, encrypted=False, childID=""):
         )
 
 
+def get_recording_subfolder(rec_data: dict | None) -> str:
+    """Classify recording into SUBDIR_EVENTS ('events') or SUBDIR_CONTINUOUS ('continuous')."""
+    if not rec_data or not isinstance(rec_data, dict):
+        return SUBDIR_EVENTS
+    vtype = rec_data.get("vedio_type", rec_data.get("video_type", None))
+    if vtype is not None:
+        try:
+            return SUBDIR_CONTINUOUS if int(vtype) == 1 else SUBDIR_EVENTS
+        except (ValueError, TypeError):
+            pass
+    return SUBDIR_EVENTS
+
+
 def getColdFile(
     hass: HomeAssistant,
     entry_id: str,
@@ -1060,6 +1134,7 @@ def getColdFile(
     endDate: int,
     folder: str,
     childID="",
+    subfolder: str | None = None,
 ):
     coldDirPath = getColdDirPathForEntry(hass, entry_id)
     fileName = getFileName(startDate, endDate, False, childID=childID)
@@ -1070,7 +1145,28 @@ def getColdFile(
         extension = ".jpg"
     else:
         raise Unresolvable("Incorrect folder specified: " + folder)
-    return coldDirPath + "/" + folder + "/" + fileName + extension
+
+    entry = hass.config_entries.async_get_entry(entry_id) if hass else None
+    entry_data = entry.data if entry else {}
+    download_method = entry_data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+
+    # In Fast mode, use subfolder if provided
+    if download_method == SD_DOWNLOAD_METHOD_FAST and subfolder:
+        sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
+        # Retrocompatibility: if file exists in root, return it
+        if not os.path.exists(sub_path):
+            root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+            if os.path.exists(root_path):
+                return root_path
+        return sub_path
+
+    # In Legacy mode (or without subfolder), use traditional root path
+    root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+    if not os.path.exists(root_path) and subfolder:
+        sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
+        if os.path.exists(sub_path):
+            return sub_path
+    return root_path
 
 
 async def getHotFile(
@@ -1122,6 +1218,7 @@ async def getRecording(
     endDate: int,
     recordingCount: int = False,
     totalRecordingCount: int = False,
+    subfolder: str | None = None,
 ) -> str:
     timeCorrection = await hass.async_add_executor_job(tapo.getTimeCorrection)
     startDate = int(startDate)
@@ -1135,7 +1232,13 @@ async def getRecording(
     downloadUID = getFileName(startDate, endDate, False, childID=childID)
 
     coldFilePath = getColdFile(
-        hass, entry_id, startDate, endDate, "videos", childID=childID
+        hass,
+        entry_id,
+        startDate,
+        endDate,
+        "videos",
+        childID=childID,
+        subfolder=subfolder,
     )
     if not os.path.exists(coldFilePath):
         # this NEEDS to happen otherwise camera does not send data!
@@ -1167,7 +1270,15 @@ async def getRecording(
 
         if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
             entryData["sdDownloadMethod"] = "Fast (Download Protocol)"
-            thumb_path = coldDirPath + "/thumbs/" + downloadUID + ".jpg"
+            thumb_path = getColdFile(
+                hass,
+                entry_id,
+                startDate,
+                endDate,
+                "thumbs",
+                childID=childID,
+                subfolder=subfolder,
+            )
             cloud_pwd = (
                 getattr(tapo, "cloudPassword", "")
                 or entry_data_dict.get(CLOUD_PASSWORD)
@@ -1247,7 +1358,9 @@ async def getRecording(
             },
         )
 
-    await processDownload(hass, entry_id, entryData, startDate, endDate)
+    await processDownload(
+        hass, entry_id, entryData, startDate, endDate, subfolder=subfolder
+    )
 
     return coldFilePath
 
