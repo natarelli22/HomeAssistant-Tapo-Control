@@ -437,7 +437,7 @@ class TapoSyncSensor(TapoSensorEntity):
                 elif not data.get("mediaSyncAvailable"):
                     self._attr_native_value = "No Recordings Found"
                     self._attr_icon = "mdi:sd"
-                elif data.get("downloadProgress"):
+                elif runningMediaSync and data.get("downloadProgress"):
                     if data["downloadProgress"] == "Finished download":
                         self._attr_native_value = "Idle"
                         self._attr_icon = "mdi:sd"
@@ -455,7 +455,7 @@ class TapoSyncSensor(TapoSensorEntity):
                 "storage_mode": RECORDINGS_SOURCE_SD,
                 "sync_enabled": bool(enable_media_sync),
                 "media_sync_available": data.get("mediaSyncAvailable", True),
-                "download_progress": data.get("downloadProgress"),
+                "download_progress": data.get("downloadProgress") if runningMediaSync else "Idle",
             }
             if data.get("sdDownloadMethod"):
                 attributes["sd_download_method"] = data["sdDownloadMethod"]

@@ -1655,7 +1655,15 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     vol.Required(
                         SD_DOWNLOAD_METHOD,
                         description={"suggested_value": sd_download_method},
-                    ): vol.In(SD_DOWNLOAD_METHOD_OPTIONS),
+                    ): selector(
+                        {
+                            "select": {
+                                "options": SD_DOWNLOAD_METHOD_OPTIONS,
+                                "mode": "dropdown",
+                                "translation_key": "sd_download_method",
+                            }
+                        }
+                    ),
                 }
             ),
             errors=errors,
@@ -1689,7 +1697,15 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     vol.Required(
                         SD_SYNC_RECORDING_TYPES,
                         description={"suggested_value": current_sync_type},
-                    ): vol.In(SD_SYNC_RECORDING_TYPES_OPTIONS),
+                    ): selector(
+                        {
+                            "select": {
+                                "options": SD_SYNC_RECORDING_TYPES_OPTIONS,
+                                "mode": "dropdown",
+                                "translation_key": "sd_sync_recording_types",
+                            }
+                        }
+                    ),
                 }
             ),
             errors=errors,

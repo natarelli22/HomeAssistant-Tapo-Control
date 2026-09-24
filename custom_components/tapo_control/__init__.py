@@ -1490,6 +1490,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 except Exception as err:
                     LOGGER.error(err)
                 LOGGER.debug("runningMediaSync -false")
+                device["downloadProgress"] = "Finished download"
                 device["runningMediaSync"] = False
             else:
                 LOGGER.debug(

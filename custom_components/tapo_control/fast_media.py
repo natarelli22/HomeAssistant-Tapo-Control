@@ -479,23 +479,8 @@ class FastDownloader:
             with open(temp_ts, "wb") as fv, open(temp_audio, "wb") as fa:
                 demux = ClipDemuxer(fv.write, fa.write)
 
-                def _on_progress():
-                    nonlocal last_progress_time
-                    now = time.time()
-                    if now - last_progress_time >= 1.0:
-                        last_progress_time = now
-                        if progress_callback:
-                            progress_callback(
-                                {
-                                    "currentAction": "Fast Downloading (SD)",
-                                    "fileName": self.output_video_path,
-                                    "progress": min(segment_length, round(demux.video_seconds, 1)),
-                                    "total": segment_length,
-                                }
-                            )
-
                 with MediaSession(self.host, self.cloud_password, port=self.port) as sess:
-                    stream_clip(sess, self.startDate, self.endDate, demux, on_data=_on_progress)
+                    stream_clip(sess, self.startDate, self.endDate, demux)
                     sess.stop()
 
             if not os.path.exists(temp_ts) or os.path.getsize(temp_ts) == 0:
@@ -566,15 +551,7 @@ class FastDownloader:
         except OSError:
             pass
 
-        if progress_callback:
-            progress_callback(
-                {
-                    "currentAction": "Finished download",
-                    "fileName": self.output_video_path,
-                    "progress": segment_length,
-                    "total": segment_length,
-                }
-            )
+
 
         return {
             "currentAction": "Finished download",

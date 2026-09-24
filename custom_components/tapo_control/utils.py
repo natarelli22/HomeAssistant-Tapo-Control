@@ -1081,21 +1081,17 @@ def processDownloadStatus(
         if isinstance(status, str):
             entryData["downloadProgress"] = status
         else:
-            entryData["downloadProgress"] = (
-                status["currentAction"]
-                + " "
-                + date
-                + (
-                    f" ({recordingCount} / {allRecordingsCount})"
-                    if recordingCount is not False
-                    else ""
+            action = status.get("currentAction", "")
+            if action and action != "Finished download":
+                date_str = f"{date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else date
+                entryData["downloadProgress"] = (
+                    f"{action} {date_str}"
+                    + (
+                        f" ({recordingCount} / {allRecordingsCount})"
+                        if recordingCount is not False
+                        else ""
+                    )
                 )
-                + (
-                    ": " + str(round(status["progress"])) + " / " + str(status["total"])
-                    if status["total"] > 0
-                    else ""
-                )
-            )
 
     return processUpdate
 
@@ -1167,6 +1163,92 @@ def getColdFile(
         if os.path.exists(sub_path):
             return sub_path
     return root_path
+
+
+def reorganize_media_storage(hass: HomeAssistant, entry_id: str) -> None:
+    """Reorganize media files between root and subfolders based on download method."""
+    entry = hass.config_entries.async_get_entry(entry_id) if hass else None
+    if not entry:
+        return
+    download_method = entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+    cold_dir = getColdDirPathForEntry(hass, entry_id)
+    if not cold_dir or not os.path.exists(cold_dir):
+        return
+
+    videos_dir = os.path.join(cold_dir, "videos")
+    thumbs_dir = os.path.join(cold_dir, "thumbs")
+
+    if download_method == SD_DOWNLOAD_METHOD_FAST:
+        # Move root files into events/ or continuous/
+        if os.path.exists(videos_dir):
+            events_vdir = os.path.join(videos_dir, SUBDIR_EVENTS)
+            cont_vdir = os.path.join(videos_dir, SUBDIR_CONTINUOUS)
+            events_tdir = os.path.join(thumbs_dir, SUBDIR_EVENTS)
+            cont_tdir = os.path.join(thumbs_dir, SUBDIR_CONTINUOUS)
+
+            try:
+                for fname in os.listdir(videos_dir):
+                    fpath = os.path.join(videos_dir, fname)
+                    if os.path.isfile(fpath) and fname.endswith(".mp4"):
+                        m = re.search(r"(\d{10})-(\d{10})", fname)
+                        is_continuous = False
+                        if m:
+                            duration = int(m.group(2)) - int(m.group(1))
+                            if duration >= 900:  # 15 minutes or longer is continuous
+                                is_continuous = True
+
+                        target_vdir = cont_vdir if is_continuous else events_vdir
+                        target_tdir = cont_tdir if is_continuous else events_tdir
+                        os.makedirs(target_vdir, exist_ok=True)
+                        dest_fpath = os.path.join(target_vdir, fname)
+                        if not os.path.exists(dest_fpath):
+                            shutil.move(fpath, dest_fpath)
+                            LOGGER.info("[Storage Migration] Moved %s -> %s", fname, target_vdir)
+
+                        stem = os.path.splitext(fname)[0]
+                        thumb_name = f"{stem}.jpg"
+                        root_thumb = os.path.join(thumbs_dir, thumb_name)
+                        if os.path.exists(root_thumb):
+                            os.makedirs(target_tdir, exist_ok=True)
+                            dest_thumb = os.path.join(target_tdir, thumb_name)
+                            if not os.path.exists(dest_thumb):
+                                shutil.move(root_thumb, dest_thumb)
+            except Exception as err:
+                LOGGER.error("Error during storage migration to Fast mode: %s", err)
+
+    elif download_method == SD_DOWNLOAD_METHOD_LEGACY:
+        # Revert files from events/ and continuous/ back to root
+        for sdir_name in (SUBDIR_EVENTS, SUBDIR_CONTINUOUS):
+            sub_vdir = os.path.join(videos_dir, sdir_name)
+            sub_tdir = os.path.join(thumbs_dir, sdir_name)
+            if os.path.exists(sub_vdir) and os.path.isdir(sub_vdir):
+                try:
+                    for fname in os.listdir(sub_vdir):
+                        src = os.path.join(sub_vdir, fname)
+                        dst = os.path.join(videos_dir, fname)
+                        if os.path.isfile(src) and not os.path.exists(dst):
+                            shutil.move(src, dst)
+                    if not os.listdir(sub_vdir):
+                        os.rmdir(sub_vdir)
+                except Exception as err:
+                    LOGGER.error("Error reverting videos from %s: %s", sub_vdir, err)
+
+            if os.path.exists(sub_tdir) and os.path.isdir(sub_tdir):
+                try:
+                    for fname in os.listdir(sub_tdir):
+                        src = os.path.join(sub_tdir, fname)
+                        dst = os.path.join(thumbs_dir, fname)
+                        if os.path.isfile(src) and not os.path.exists(dst):
+                            shutil.move(src, dst)
+                    if not os.listdir(sub_tdir):
+                        os.rmdir(sub_tdir)
+                except Exception as err:
+                    LOGGER.error("Error reverting thumbs from %s: %s", sub_tdir, err)
+
+
+async def async_reorganize_media_storage(hass: HomeAssistant, entry_id: str) -> None:
+    """Async wrapper to run reorganize_media_storage inside executor."""
+    await hass.async_add_executor_job(reorganize_media_storage, hass, entry_id)
 
 
 async def getHotFile(
@@ -2556,6 +2638,7 @@ def convert_to_timestamp(date_string):
 
 async def update_listener(hass, entry):
     """Handle options update."""
+    await async_reorganize_media_storage(hass, entry.entry_id)
     host = entry.data.get(CONF_IP_ADDRESS)
     controlPort = entry.data.get(CONTROL_PORT)
     username = entry.data.get(CONF_USERNAME)

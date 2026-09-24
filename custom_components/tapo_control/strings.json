@@ -124,14 +124,20 @@
           "media_view_recordings_order": "Order of recordings in Media Browser",
           "media_sync_hours": "Number of hours to keep synchronized",
           "media_sync_cold_storage_path": "Cold storage path",
-          "sd_download_method": "SD Card download method"
+          "sd_download_method": "Recordings download method"
+        },
+        "data_description": {
+          "sd_download_method": "Fast downloads recordings quickly via camera port 8800. Legacy downloads via RTSP playback."
         },
         "description": "Modify settings of recordings media synchronization from camera SD Card.\n\nRecordings are stored in the Home Assistant config folder by default (.storage/tapo_control) which is included in backups and can grow quickly. Set a Cold storage path outside of your config (for example /media/tapo_control) to avoid bloating backups.\nLeave empty to use default Home Assistant storage."
       },
       "media_sd_fast_options": {
         "title": "Fast Download Options",
         "data": {
-          "sd_sync_recording_types": "Recordings to synchronize"
+          "sd_sync_recording_types": "Recording types to synchronize"
+        },
+        "data_description": {
+          "sd_sync_recording_types": "Select which recording types to synchronize from the SD card."
         },
         "description": "Select which recording types to download from the SD card using the fast protocol.\n\n• Both (Events first, then Continuous): Downloads detection events first in seconds, then fills in continuous recordings.\n• Detection Events only: Fast downloads only when motion/person was detected (30s-2min clips).\n• Continuous Recording only: Downloads only 30-minute scheduled recording blocks."
       },
@@ -211,6 +217,21 @@
             }
           }
         }
+      }
+    }
+  },
+  "selector": {
+    "sd_download_method": {
+      "options": {
+        "Fast (Download Protocol)": "Fast Download (Port 8800 - High Speed)",
+        "Legacy (Playback)": "Legacy (RTSP Stream - Normal Speed)"
+      }
+    },
+    "sd_sync_recording_types": {
+      "options": {
+        "both": "Both (Detection Events first, then Continuous)",
+        "events": "Detection Events only (Motion/Person)",
+        "continuous": "Continuous Recording only (24/7)"
       }
     }
   }
