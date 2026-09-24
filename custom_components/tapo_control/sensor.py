@@ -457,6 +457,10 @@ class TapoSyncSensor(TapoSensorEntity):
                 "media_sync_available": data.get("mediaSyncAvailable", True),
                 "download_progress": data.get("downloadProgress"),
             }
+            if data.get("sdDownloadMethod"):
+                attributes["sd_download_method"] = data["sdDownloadMethod"]
+            if data.get("lastDownloadWarning"):
+                attributes["last_download_warning"] = data["lastDownloadWarning"]
 
         media_sync_hours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
         if media_sync_hours:

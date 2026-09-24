@@ -86,7 +86,8 @@
           "media_view_days_order": "Ordem dos dias no Navegador de Mídia",
           "media_view_recordings_order": "Ordem das gravações no Navegador de Mídia",
           "media_sync_hours": "Número de horas para manter sincronizadas",
-          "media_sync_cold_storage_path": "Caminho do cold storage"
+          "media_sync_cold_storage_path": "Caminho do cold storage",
+          "sd_download_method": "Método de download do cartão SD"
         },
         "description": "Modificar configurações de sincronização de gravações do Cartão SD.\n\nAs gravações são armazenadas na pasta de configuração do Home Assistant por padrão (.storage/tapo_control), o que é incluído nos backups e pode crescer rapidamente. Defina um caminho de cold storage fora de sua configuração (por exemplo /media/tapo_control) para evitar backups pesados.\nDeixe em branco para usar o armazenamento padrão."
       },

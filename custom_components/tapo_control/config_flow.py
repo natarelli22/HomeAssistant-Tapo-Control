@@ -51,6 +51,9 @@ from .const import (
     MEDIA_VIEW_DAYS_ORDER_OPTIONS,
     MEDIA_VIEW_RECORDINGS_ORDER,
     MEDIA_VIEW_RECORDINGS_ORDER_OPTIONS,
+    SD_DOWNLOAD_METHOD,
+    SD_DOWNLOAD_METHOD_LEGACY,
+    SD_DOWNLOAD_METHOD_OPTIONS,
     REPORTED_IP_ADDRESS,
     DOORBELL_UDP_DISCOVERED,
     SOUND_DETECTION_DURATION,
@@ -1555,6 +1558,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
             MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
         )
         media_sync_hours = self.config_entry.data.get(MEDIA_SYNC_HOURS, "")
+        sd_download_method = self.config_entry.data.get(
+            SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+        )
 
         if user_input is not None:
             # 1. Check if camera has an SD card inserted
@@ -1593,6 +1599,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     )
                     allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
                     allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
+                    allConfigData[SD_DOWNLOAD_METHOD] = user_input.get(
+                        SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+                    )
 
                     self.hass.config_entries.async_update_entry(
                         self.config_entry,
@@ -1611,6 +1620,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
                 MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
             )
             media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
+            sd_download_method = user_input.get(
+                SD_DOWNLOAD_METHOD, sd_download_method
+            )
 
         return self.async_show_form(
             step_id="media_sd",
@@ -1632,6 +1644,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         MEDIA_SYNC_COLD_STORAGE_PATH,
                         description={"suggested_value": suggested_cold_path},
                     ): str,
+                    vol.Required(
+                        SD_DOWNLOAD_METHOD,
+                        description={"suggested_value": sd_download_method},
+                    ): vol.In(SD_DOWNLOAD_METHOD_OPTIONS),
                 }
             ),
             errors=errors,

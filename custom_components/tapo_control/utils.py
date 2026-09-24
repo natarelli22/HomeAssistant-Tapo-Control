@@ -17,6 +17,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from pytapo.media_stream.downloader import Downloader
+from .fast_media import FastDownloader, FastMediaError
 from homeassistant.components.media_source.error import Unresolvable
 
 from haffmpeg.tools import IMAGE_JPEG, ImageFrame
@@ -63,6 +64,9 @@ from .const import (
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
+    SD_DOWNLOAD_METHOD,
+    SD_DOWNLOAD_METHOD_LEGACY,
+    SD_DOWNLOAD_METHOD_FAST,
     TIME_SYNC_DST,
     TIME_SYNC_NDST,
     TPLINK_DOMAIN,
@@ -1136,33 +1140,101 @@ async def getRecording(
     if not os.path.exists(coldFilePath):
         # this NEEDS to happen otherwise camera does not send data!
         allRecordings = await hass.async_add_executor_job(tapo.getRecordings, date)
-        downloader = Downloader(
-            tapo,
-            startDate,
-            endDate,
-            timeCorrection,
-            coldDirPath + "/videos/",
-            0,
-            None,
-            None,
-            downloadUID + ".mp4",
+
+        entry = hass.config_entries.async_get_entry(entry_id)
+        entry_data_dict = entry.data if entry else {}
+        selected_download_method = entry_data_dict.get(
+            SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+        )
+
+        device_name = entryData.get("camData", {}).get("basic_info", {}).get("device_alias")
+        if not device_name:
+            device_name = getattr(entry, "title", None) or entry_id
+
+        status_callback = processDownloadStatus(
+            entryData,
+            date,
+            (
+                len(allRecordings)
+                if totalRecordingCount is False
+                else totalRecordingCount
+            ),
+            recordingCount if recordingCount is not False else False,
         )
 
         entryData["isDownloadingStream"] = True
-        downloadedFile = await downloader.downloadFile(
-            processDownloadStatus(
-                entryData,
-                date,
-                (
-                    len(allRecordings)
-                    if totalRecordingCount is False
-                    else totalRecordingCount
-                ),
-                recordingCount if recordingCount is not False else False,
+        downloadedFile = None
+
+        if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
+            entryData["sdDownloadMethod"] = "Fast (Download Protocol)"
+            thumb_path = coldDirPath + "/thumbs/" + downloadUID + ".jpg"
+            cloud_pwd = (
+                getattr(tapo, "cloudPassword", "")
+                or entry_data_dict.get(CLOUD_PASSWORD)
+                or entry_data_dict.get(CONF_PASSWORD)
+                or ""
             )
-        )
+            ffmpeg_binary = "ffmpeg"
+            if DATA_FFMPEG in hass.data and hasattr(hass.data[DATA_FFMPEG], "binary"):
+                ffmpeg_binary = hass.data[DATA_FFMPEG].binary
+
+            try:
+                fast_downloader = FastDownloader(
+                    host=tapo.host,
+                    cloud_password=cloud_pwd,
+                    startDate=startDate,
+                    endDate=endDate,
+                    output_video_path=coldFilePath,
+                    output_thumb_path=thumb_path,
+                    port=getattr(tapo, "streamPort", 8800),
+                    ffmpeg_bin=ffmpeg_binary,
+                )
+                LOGGER.debug(
+                    "[Fast Download - %s] Starting fast download for %s (%s to %s)",
+                    device_name,
+                    coldFilePath,
+                    startDate,
+                    endDate,
+                )
+                downloadedFile = await hass.async_add_executor_job(
+                    fast_downloader.sync_download, status_callback
+                )
+                entryData["lastDownloadWarning"] = None
+            except Exception as err:
+                err_msg = str(err)
+                if "401" in err_msg or "authentication" in err_msg.lower():
+                    warn_desc = (
+                        "Falha de autenticação na porta de mídia 8800 (HTTP 401). "
+                        "Verifique a 'Cloud Password' nas configurações da câmera."
+                    )
+                else:
+                    warn_desc = f"Erro no download rápido na porta 8800: {err}"
+                LOGGER.warning(
+                    "[Fast Download - %s] %s Executando fallback para o método legado (Downloader).",
+                    device_name,
+                    warn_desc,
+                )
+                entryData["sdDownloadMethod"] = "Legacy (Fallback)"
+                entryData["lastDownloadWarning"] = warn_desc
+
+        if downloadedFile is None:
+            if entryData.get("sdDownloadMethod") != "Legacy (Fallback)":
+                entryData["sdDownloadMethod"] = "Legacy (Playback)"
+            downloader = Downloader(
+                tapo,
+                startDate,
+                endDate,
+                timeCorrection,
+                coldDirPath + "/videos/",
+                0,
+                None,
+                None,
+                downloadUID + ".mp4",
+            )
+            downloadedFile = await downloader.downloadFile(status_callback)
+
         entryData["isDownloadingStream"] = False
-        if downloadedFile["currentAction"] == "Recording in progress":
+        if downloadedFile.get("currentAction") == "Recording in progress":
             raise Unresolvable("Recording is currently in progress.")
 
         hass.bus.fire(
