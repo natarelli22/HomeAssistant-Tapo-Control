@@ -43,6 +43,7 @@ from .const import (
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
     TAPO_CARE_CLEANUP_TIME,
+    FAST_CLEANUP_TIME,
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
@@ -1683,19 +1684,54 @@ class TapoOptionsFlowHandler(OptionsFlow):
         current_show_online = self.config_entry.data.get(
             SD_SHOW_ONLINE_CONTENT, False
         )
+        current_fast_cleanup_time = self.config_entry.data.get(
+            FAST_CLEANUP_TIME, "04:00"
+        )
 
         if user_input is not None:
-            all_config[SD_SYNC_RECORDING_TYPES] = user_input.get(
-                SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
+            raw_cleanup_time = user_input.get(FAST_CLEANUP_TIME)
+            if raw_cleanup_time is None:
+                raw_cleanup_time = current_fast_cleanup_time
+            else:
+                raw_cleanup_time = str(raw_cleanup_time).strip()
+
+            formatted_cleanup_time = ""
+            if not raw_cleanup_time:
+                errors[FAST_CLEANUP_TIME] = "cleanup_time_required"
+            else:
+                time_match = re.match(
+                    r"^([01]?[0-9]|2[0-3]):([0-5][0-9])$", raw_cleanup_time
+                )
+                if not time_match:
+                    errors[FAST_CLEANUP_TIME] = "invalid_cleanup_time"
+                else:
+                    formatted_cleanup_time = (
+                        f"{int(time_match.group(1)):02d}:{int(time_match.group(2)):02d}"
+                    )
+
+            if not errors:
+                all_config[SD_SYNC_RECORDING_TYPES] = user_input.get(
+                    SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
+                )
+                all_config[SD_SHOW_ONLINE_CONTENT] = bool(
+                    user_input.get(SD_SHOW_ONLINE_CONTENT, False)
+                )
+                all_config[FAST_CLEANUP_TIME] = formatted_cleanup_time
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data=all_config,
+                )
+                return self.async_create_entry(title="", data=None)
+
+            current_sync_type = user_input.get(
+                SD_SYNC_RECORDING_TYPES, current_sync_type
             )
-            all_config[SD_SHOW_ONLINE_CONTENT] = bool(
-                user_input.get(SD_SHOW_ONLINE_CONTENT, False)
+            current_show_online = user_input.get(
+                SD_SHOW_ONLINE_CONTENT, current_show_online
             )
-            self.hass.config_entries.async_update_entry(
-                self.config_entry,
-                data=all_config,
+            current_fast_cleanup_time = user_input.get(
+                FAST_CLEANUP_TIME, current_fast_cleanup_time
             )
-            return self.async_create_entry(title="", data=None)
 
         return self.async_show_form(
             step_id="media_sd_fast_options",
@@ -1717,6 +1753,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         SD_SHOW_ONLINE_CONTENT,
                         description={"suggested_value": current_show_online},
                     ): selector({"boolean": {}}),
+                    vol.Required(
+                        FAST_CLEANUP_TIME,
+                        description={"suggested_value": current_fast_cleanup_time},
+                    ): str,
                 }
             ),
             errors=errors,

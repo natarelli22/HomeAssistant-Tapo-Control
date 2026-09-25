@@ -68,6 +68,7 @@ from .const import (
     SD_DOWNLOAD_METHOD,
     SD_DOWNLOAD_METHOD_LEGACY,
     SD_DOWNLOAD_METHOD_FAST,
+    FAST_CLEANUP_TIME,
     SUBDIR_EVENTS,
     SUBDIR_CONTINUOUS,
     SD_SHOW_ONLINE_CONTENT,
@@ -339,7 +340,12 @@ async def findMedia(hass, entryData, entry):
     entryData["mediaScanResult"] = mediaScanResult
     entryData["initialMediaScanDone"] = True
 
-    await mediaCleanup(hass, entry, entryData)
+    fast_cleanup_time = entry.data.get(FAST_CLEANUP_TIME, "04:00")
+    entry_download_method = entry.data.get(
+        SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+    )
+    if not (entry_download_method == SD_DOWNLOAD_METHOD_FAST and fast_cleanup_time):
+        await mediaCleanup(hass, entry, entryData)
 
 
 async def processDownload(

@@ -47,6 +47,7 @@ from .const import (
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
     TAPO_CARE_CLEANUP_TIME,
+    FAST_CLEANUP_TIME,
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
@@ -978,23 +979,76 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
             )
             if sync_source == RECORDINGS_SOURCE_SD:
-                if (
-                    ts - hass.data[DOMAIN][entry.entry_id]["lastMediaCleanup"]
-                    > MEDIA_CLEANUP_PERIOD
-                ):
-                    LOGGER.debug(
-                        "Initiating media cleanup for "
-                        + hass.data[DOMAIN][entry.entry_id]["name"]
-                        + "..."
+                download_method = entry.data.get(
+                    SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+                )
+                fast_cleanup_time = entry.data.get(FAST_CLEANUP_TIME, "04:00")
+
+                if download_method == SD_DOWNLOAD_METHOD_FAST and fast_cleanup_time:
+                    try:
+                        target_hour, target_minute = map(
+                            int, fast_cleanup_time.split(":")
+                        )
+                    except Exception:
+                        target_hour, target_minute = 4, 0
+
+                    local_now = dt.now()
+                    target_today = local_now.replace(
+                        hour=target_hour, minute=target_minute, second=0, microsecond=0
                     )
-                    await mediaCleanup(hass, entry, hass.data[DOMAIN][entry.entry_id])
-                if hass.data[DOMAIN][entry.entry_id]["isParent"]:
-                    for child in hass.data[DOMAIN][entry.entry_id]["childDevices"]:
-                        if ts - child["lastMediaCleanup"] > MEDIA_CLEANUP_PERIOD:
-                            LOGGER.debug(
-                                "Initiating media cleanup for " + child["name"] + "..."
-                            )
-                            await mediaCleanup(hass, entry, child)
+
+                    parent_device = hass.data[DOMAIN][entry.entry_id]
+                    last_cleanup_ts = parent_device.get("lastMediaCleanup", 0)
+                    last_cleanup_date = None
+                    if last_cleanup_ts:
+                        try:
+                            last_cleanup_date = dt.as_local(
+                                dt.utc_from_timestamp(last_cleanup_ts)
+                            ).date()
+                        except Exception:
+                            last_cleanup_date = None
+
+                    should_run = False
+                    if local_now >= target_today:
+                        if (
+                            last_cleanup_date is None
+                            or last_cleanup_date < local_now.date()
+                        ):
+                            should_run = True
+
+                    if should_run:
+                        LOGGER.debug(
+                            "Initiating scheduled media cleanup for %s at %s...",
+                            parent_device["name"],
+                            fast_cleanup_time,
+                        )
+                        await mediaCleanup(hass, entry, parent_device)
+                        if parent_device["isParent"]:
+                            for child in parent_device["childDevices"]:
+                                LOGGER.debug(
+                                    "Initiating scheduled media cleanup for %s at %s...",
+                                    child["name"],
+                                    fast_cleanup_time,
+                                )
+                                await mediaCleanup(hass, entry, child)
+                else:
+                    if (
+                        ts - hass.data[DOMAIN][entry.entry_id]["lastMediaCleanup"]
+                        > MEDIA_CLEANUP_PERIOD
+                    ):
+                        LOGGER.debug(
+                            "Initiating media cleanup for "
+                            + hass.data[DOMAIN][entry.entry_id]["name"]
+                            + "..."
+                        )
+                        await mediaCleanup(hass, entry, hass.data[DOMAIN][entry.entry_id])
+                    if hass.data[DOMAIN][entry.entry_id]["isParent"]:
+                        for child in hass.data[DOMAIN][entry.entry_id]["childDevices"]:
+                            if ts - child["lastMediaCleanup"] > MEDIA_CLEANUP_PERIOD:
+                                LOGGER.debug(
+                                    "Initiating media cleanup for " + child["name"] + "..."
+                                )
+                                await mediaCleanup(hass, entry, child)
 
             if hass.is_running:
                 await scheduleAll(

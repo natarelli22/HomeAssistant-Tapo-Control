@@ -135,11 +135,13 @@
         "title": "Fast Download Options",
         "data": {
           "sd_sync_recording_types": "Recording types to synchronize",
-          "sd_show_online_content": "Show un-downloaded SD Card content"
+          "sd_show_online_content": "Show un-downloaded SD Card content",
+          "fast_cleanup_time": "Time of day to run cleanup (HH:MM)"
         },
         "data_description": {
           "sd_sync_recording_types": "Select which recording types to synchronize from the SD card.",
-          "sd_show_online_content": "When enabled, recordings on the SD card are visible in Media Browser even before downloading, and files deleted from the SD card are also deleted from Home Assistant. When disabled, only downloaded files are shown, and local files are deleted strictly based on retention hours."
+          "sd_show_online_content": "When enabled, recordings on the SD card are visible in Media Browser even before downloading, and files deleted from the SD card are also deleted from Home Assistant. When disabled, only downloaded files are shown, and local files are deleted strictly based on retention hours.",
+          "fast_cleanup_time": "Specify the daily time (24-hour format HH:MM, e.g. 04:00) when old synchronized recordings are deleted according to retention hours. Cleanup will run once per day at or after this time."
         },
         "description": "Select which recording types to download from the SD card using the fast protocol.\n\n• Both (Events first, then Continuous): Downloads detection events first in seconds, then fills in continuous recordings.\n• Detection Events only: Fast downloads only when motion/person was detected (30s-2min clips).\n• Continuous Recording only: Downloads only 30-minute scheduled recording blocks."
       },

@@ -24,9 +24,13 @@ from .const import (
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
     TAPO_CARE_CLEANUP_TIME,
+    FAST_CLEANUP_TIME,
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
+    SD_DOWNLOAD_METHOD,
+    SD_DOWNLOAD_METHOD_LEGACY,
+    SD_DOWNLOAD_METHOD_FAST,
 )
 from .tapo.entities import TapoSensorEntity
 
@@ -461,6 +465,28 @@ class TapoSyncSensor(TapoSensorEntity):
                 attributes["sd_download_method"] = data["sdDownloadMethod"]
             if data.get("lastDownloadWarning"):
                 attributes["last_download_warning"] = data["lastDownloadWarning"]
+
+            download_method = self._config_entry.data.get(
+                SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+            )
+            fast_cleanup_time = self._config_entry.data.get(
+                FAST_CLEANUP_TIME, "04:00"
+            )
+            if download_method == SD_DOWNLOAD_METHOD_FAST and fast_cleanup_time:
+                attributes["cleanup_time"] = fast_cleanup_time
+                try:
+                    ch, cm = map(int, fast_cleanup_time.split(":"))
+                    local_now = dt_util.now()
+                    target_today = local_now.replace(
+                        hour=ch, minute=cm, second=0, microsecond=0
+                    )
+                    if local_now < target_today:
+                        next_run = target_today
+                    else:
+                        next_run = target_today + datetime.timedelta(days=1)
+                    attributes["next_cleanup"] = next_run.isoformat()
+                except Exception:
+                    pass
 
         media_sync_hours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
         if media_sync_hours:
