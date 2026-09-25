@@ -1375,6 +1375,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                     for recording in recordingsForDay:
                                         for recordingKey in recording:
                                             rec_data = recording[recordingKey]
+                                            if rec_data["endTime"] > int(ts) - 60:
+                                                continue
                                             if rec_data["endTime"] > int(ts) - int(mediaSyncTime):
                                                 sf = get_recording_subfolder(rec_data)
                                                 if sf == SUBDIR_CONTINUOUS:
@@ -1443,16 +1445,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                     totalRecordingsToDownload = 0
                                     for recording in recordingsForDay:
                                         for recordingKey in recording:
-                                            if recording[recordingKey]["endTime"] > int(
-                                                ts
-                                            ) - (int(mediaSyncTime)):
+                                            rec_end = recording[recordingKey]["endTime"]
+                                            if rec_end > int(ts) - 60:
+                                                continue
+                                            if rec_end > int(ts) - (int(mediaSyncTime)):
                                                 totalRecordingsToDownload += 1
                                     recordingCount = 0
                                     for recording in recordingsForDay:
                                         for recordingKey in recording:
-                                            if recording[recordingKey]["endTime"] > (
-                                                int(ts) - (int(mediaSyncTime))
-                                            ):
+                                            rec_end = recording[recordingKey]["endTime"]
+                                            if rec_end > int(ts) - 60:
+                                                continue
+                                            if rec_end > (int(ts) - (int(mediaSyncTime))):
                                                 recordingCount += 1
                                                 try:
                                                     enableMediaSync = device[

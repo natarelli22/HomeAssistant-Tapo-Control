@@ -1681,7 +1681,7 @@ class TapoOptionsFlowHandler(OptionsFlow):
             SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
         )
         current_show_online = self.config_entry.data.get(
-            SD_SHOW_ONLINE_CONTENT, True
+            SD_SHOW_ONLINE_CONTENT, False
         )
 
         if user_input is not None:
@@ -1689,7 +1689,7 @@ class TapoOptionsFlowHandler(OptionsFlow):
                 SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
             )
             all_config[SD_SHOW_ONLINE_CONTENT] = bool(
-                user_input.get(SD_SHOW_ONLINE_CONTENT, True)
+                user_input.get(SD_SHOW_ONLINE_CONTENT, False)
             )
             self.hass.config_entries.async_update_entry(
                 self.config_entry,

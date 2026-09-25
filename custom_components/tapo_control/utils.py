@@ -756,18 +756,34 @@ def format_cleanup_counts(
     return f"{prefix}: {', '.join(parts)}"
 
 
+def get_date_key_from_stem(stem: str) -> str:
+    """Extract a YYYY-MM-DD date key from a recording filename stem."""
+    # 1. SD card pattern: {startTS}-{endTS} or {childID}-{startTS}-{endTS}
+    sd_match = re.search(r"(\d{10})-(\d{10})", stem)
+    if sd_match:
+        try:
+            start_ts = int(sd_match.group(1))
+            dt_obj = dt_util.as_local(dt_util.utc_from_timestamp(start_ts))
+            return dt_obj.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+
+    # 2. Tapo Care pattern: YYYY-MM-DD...
+    m = re.search(r"(\d{4})[-_](\d{2})[-_](\d{2})", stem)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+    return "other"
+
+
 def format_cleanup_summary(
     hass, sync_source: str, unique_recordings: list[str]
 ) -> str:
     """Format cleanup summary grouped by date from a list of recording stems."""
     date_counts = {}
     for rec in unique_recordings:
-        m = re.match(r"^(\d{4})[-_]?(\d{2})[-_]?(\d{2})", rec)
-        if m:
-            d_key = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-            date_counts[d_key] = date_counts.get(d_key, 0) + 1
-        else:
-            date_counts["other"] = date_counts.get("other", 0) + 1
+        d_key = get_date_key_from_stem(rec)
+        date_counts[d_key] = date_counts.get(d_key, 0) + 1
 
     return format_cleanup_counts(hass, sync_source, date_counts)
 
@@ -885,7 +901,7 @@ async def mediaCleanup(hass, entry, deviceData):
         expired_recordings = {}  # fileName -> list of filePaths
         subdirs_to_check = set()
 
-        show_online_content = entry.data.get(SD_SHOW_ONLINE_CONTENT, True)
+        show_online_content = entry.data.get(SD_SHOW_ONLINE_CONTENT, False)
         entry_download_method = entry.data.get(
             SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
         )
@@ -973,12 +989,8 @@ async def mediaCleanup(hass, entry, deviceData):
 
                     batch_date_counts = {}
                     for stem in batch_stems:
-                        m = re.match(r"^(\d{4})[-_]?(\d{2})[-_]?(\d{2})", stem)
-                        if m:
-                            d_key = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
-                            batch_date_counts[d_key] = batch_date_counts.get(d_key, 0) + 1
-                        else:
-                            batch_date_counts["other"] = batch_date_counts.get("other", 0) + 1
+                        d_key = get_date_key_from_stem(stem)
+                        batch_date_counts[d_key] = batch_date_counts.get(d_key, 0) + 1
 
                     batch_sum = format_cleanup_counts(hass, sync_source, batch_date_counts)
                     return batch_date_counts, batch_sum

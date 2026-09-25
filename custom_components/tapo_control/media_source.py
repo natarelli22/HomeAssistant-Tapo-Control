@@ -794,9 +794,9 @@ class TapoMediaSource(MediaSource):
                 else SD_DOWNLOAD_METHOD_LEGACY
             )
             show_online_content = (
-                config_entry.data.get(SD_SHOW_ONLINE_CONTENT, True)
+                config_entry.data.get(SD_SHOW_ONLINE_CONTENT, False)
                 if config_entry
-                else True
+                else False
             )
             if (
                 download_method == SD_DOWNLOAD_METHOD_FAST
@@ -966,9 +966,9 @@ class TapoMediaSource(MediaSource):
             seen_items: set[tuple[int, int]] = set()
             items_list: list[dict[str, Any]] = []
             show_online_content = (
-                config_entry.data.get(SD_SHOW_ONLINE_CONTENT, True)
+                config_entry.data.get(SD_SHOW_ONLINE_CONTENT, False)
                 if config_entry
-                else True
+                else False
             )
 
             # 1. Query recordings directly from camera SD card if controller is available (if enabled)
