@@ -82,6 +82,8 @@ SD_SYNC_RECORDING_TYPES_OPTIONS = [
 SUBDIR_EVENTS = "events"
 SUBDIR_CONTINUOUS = "continuous"
 
+SD_SHOW_ONLINE_CONTENT = "sd_show_online_content"
+
 TOGGLE_STATES = ["on", "off"]
 
 CONF_RTSP_TRANSPORT = "rtsp_transport"

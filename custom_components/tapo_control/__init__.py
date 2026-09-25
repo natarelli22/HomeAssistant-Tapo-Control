@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import asyncio
+import time
 from aiohttp import ClientError
 
 from homeassistant.core import HomeAssistant, callback
@@ -1333,7 +1334,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     )
                     LOGGER.debug("getRecordingsList -2")
 
-                    ts = datetime.datetime.utcnow().timestamp()
+                    ts = time.time()
                     for searchResult in recordingsList:
                         for key in searchResult:
                             LOGGER.debug("inside for - 1")
@@ -1381,18 +1382,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                                 else:
                                                     events_items.append((recording, recordingKey, sf))
 
-                                    if sd_sync_type == SD_SYNC_RECORDING_TYPES_EVENTS:
-                                        items_to_download = events_items
-                                    elif sd_sync_type == SD_SYNC_RECORDING_TYPES_CONTINUOUS:
-                                        items_to_download = continuous_items
-                                    else:
-                                        # SD_SYNC_RECORDING_TYPES_BOTH: events first, then continuous
-                                        items_to_download = events_items + continuous_items
+                                    download_queue = []
+                                    if sd_sync_type in (
+                                        SD_SYNC_RECORDING_TYPES_EVENTS,
+                                        SD_SYNC_RECORDING_TYPES_BOTH,
+                                    ):
+                                        tot_events = len(events_items)
+                                        for idx, (rec, k, sf) in enumerate(events_items, 1):
+                                            download_queue.append((rec, k, sf, idx, tot_events, "event"))
 
-                                    totalRecordingsToDownload = len(items_to_download)
-                                    recordingCount = 0
-                                    for recording, recordingKey, subf in items_to_download:
-                                        recordingCount += 1
+                                    if sd_sync_type in (
+                                        SD_SYNC_RECORDING_TYPES_CONTINUOUS,
+                                        SD_SYNC_RECORDING_TYPES_BOTH,
+                                    ):
+                                        tot_cont = len(continuous_items)
+                                        for idx, (rec, k, sf) in enumerate(continuous_items, 1):
+                                            download_queue.append((rec, k, sf, idx, tot_cont, "recording"))
+
+                                    for recording, recordingKey, subf, rec_count, tot_count, item_type in download_queue:
                                         try:
                                             enableMediaSync = device[
                                                 ENABLE_MEDIA_SYNC
@@ -1411,9 +1418,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                                     recording[recordingKey][
                                                         "endTime"
                                                     ],
-                                                    recordingCount,
-                                                    totalRecordingsToDownload,
+                                                    rec_count,
+                                                    tot_count,
                                                     subfolder=subf,
+                                                    item_type=item_type,
                                                 )
                                                 LOGGER.debug("getRecording -2")
                                             else:
@@ -1466,6 +1474,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                                             ],
                                                             recordingCount,
                                                             totalRecordingsToDownload,
+                                                            item_type="recording",
                                                         )
                                                         LOGGER.debug("getRecording -2")
                                                     else:

@@ -11,6 +11,7 @@ import urllib.parse
 import uuid
 import requests
 import base64
+import time
 
 from functools import partial
 from homeassistant.helpers.event import async_track_time_interval
@@ -69,6 +70,7 @@ from .const import (
     SD_DOWNLOAD_METHOD_FAST,
     SUBDIR_EVENTS,
     SUBDIR_CONTINUOUS,
+    SD_SHOW_ONLINE_CONTENT,
     TIME_SYNC_DST,
     TIME_SYNC_NDST,
     TPLINK_DOMAIN,
@@ -505,7 +507,7 @@ async def findColdFilesOlderThanMaxSyncTime(
             timeCorrection = 0
 
         mediaSyncTime = int(mediaSyncHours) * 60 * 60
-        ts = datetime.datetime.utcnow().timestamp()
+        ts = time.time()
         folder_path = os.path.join(coldDirPath, folder)
 
         sync_source = entry.data.get(
@@ -707,8 +709,8 @@ def warm_up_date_formatter(hass) -> None:
 
 
 def format_date_ha(hass, date_str: str) -> str:
-    """Format a date string (YYYY-MM-DD or YYYY_MM_DD) dynamically according to the Home Assistant language/locale."""
-    m = re.match(r"^(\d{4})[-_](\d{2})[-_](\d{2})", date_str)
+    """Format a date string (YYYY-MM-DD or YYYY_MM_DD or YYYYMMDD) dynamically according to the Home Assistant language/locale."""
+    m = re.match(r"^(\d{4})[-_]?(\d{2})[-_]?(\d{2})", date_str)
     if not m:
         return date_str
 
@@ -728,44 +730,46 @@ def format_date_ha(hass, date_str: str) -> str:
         return f"{year}-{month}-{day}"
 
 
-def format_cleanup_summary(
-    hass, sync_source: str, unique_recordings: list[str]
+def format_cleanup_counts(
+    hass, sync_source: str, date_counts: dict[str, int]
 ) -> str:
     """Format cleanup summary grouped by date in Home Assistant locale date format."""
     lang = getattr(getattr(hass, "config", None), "language", "en") or "en"
     lang = lang.lower()
     is_pt = lang.startswith("pt")
 
+    parts = []
+    for d_key in sorted(date_counts.keys()):
+        count = date_counts[d_key]
+        unit = (
+            ("gravação" if count == 1 else "gravações")
+            if is_pt
+            else ("recording" if count == 1 else "recordings")
+        )
+        if d_key == "other":
+            parts.append(f"{count} {unit}")
+        else:
+            fmt_d = format_date_ha(hass, d_key)
+            parts.append(f"{fmt_d} ({count} {unit})")
+
+    prefix = f"{sync_source} - Cleaned"
+    return f"{prefix}: {', '.join(parts)}"
+
+
+def format_cleanup_summary(
+    hass, sync_source: str, unique_recordings: list[str]
+) -> str:
+    """Format cleanup summary grouped by date from a list of recording stems."""
     date_counts = {}
     for rec in unique_recordings:
-        m = re.match(r"^(\d{4})[-_](\d{2})[-_](\d{2})", rec)
+        m = re.match(r"^(\d{4})[-_]?(\d{2})[-_]?(\d{2})", rec)
         if m:
             d_key = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
             date_counts[d_key] = date_counts.get(d_key, 0) + 1
         else:
             date_counts["other"] = date_counts.get("other", 0) + 1
 
-    parts = []
-    for d_key in sorted(date_counts.keys()):
-        count = date_counts[d_key]
-        if d_key == "other":
-            unit = (
-                ("gravação" if count == 1 else "gravações")
-                if is_pt
-                else ("recording" if count == 1 else "recordings")
-            )
-            parts.append(f"{count} {unit}")
-        else:
-            fmt_d = format_date_ha(hass, d_key)
-            unit = (
-                ("evento" if count == 1 else "eventos")
-                if is_pt
-                else ("event" if count == 1 else "events")
-            )
-            parts.append(f"{fmt_d} ({count} {unit})")
-
-    prefix = f"{sync_source} - Cleaned"
-    return f"{prefix}: {', '.join(parts)}"
+    return format_cleanup_counts(hass, sync_source, date_counts)
 
 
 def format_recording_timestamp(hass, rec_name: str) -> str:
@@ -841,7 +845,7 @@ async def mediaCleanup(hass, entry, deviceData):
         + "'..."
     )
 
-    ts = datetime.datetime.utcnow().timestamp()
+    ts = time.time()
     deviceData["lastMediaCleanup"] = ts
     hotDirPath = getHotDirPathForEntry(hass, entry_id)
 
@@ -881,16 +885,28 @@ async def mediaCleanup(hass, entry, deviceData):
         expired_recordings = {}  # fileName -> list of filePaths
         subdirs_to_check = set()
 
+        show_online_content = entry.data.get(SD_SHOW_ONLINE_CONTENT, True)
+        entry_download_method = entry.data.get(
+            SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+        )
+
         if sync_source == RECORDINGS_SOURCE_SD:
-            f1, s1 = await findFilesNoLongerPresentInCamera(
-                hass, entry_id, deviceData, ".mp4", "videos"
-            )
-            f2, s2 = await findFilesNoLongerPresentInCamera(
-                hass, entry_id, deviceData, ".jpg", "thumbs"
-            )
-            for fn, fp in f1 + f2:
-                expired_recordings.setdefault(fn, []).append(fp)
-            subdirs_to_check.update(s1 + s2)
+            if entry_download_method == SD_DOWNLOAD_METHOD_FAST and not show_online_content:
+                LOGGER.debug(
+                    "[%s Cleanup - %s] SD sync deletion disabled: deleting files exclusively based on retention hours.",
+                    sync_source,
+                    device_name,
+                )
+            else:
+                f1, s1 = await findFilesNoLongerPresentInCamera(
+                    hass, entry_id, deviceData, ".mp4", "videos"
+                )
+                f2, s2 = await findFilesNoLongerPresentInCamera(
+                    hass, entry_id, deviceData, ".jpg", "thumbs"
+                )
+                for fn, fp in f1 + f2:
+                    expired_recordings.setdefault(fn, []).append(fp)
+                subdirs_to_check.update(s1 + s2)
 
         f_mp4, s_mp4 = await findColdFilesOlderThanMaxSyncTime(
             hass, entry, deviceData, ".mp4", "videos"
@@ -914,14 +930,20 @@ async def mediaCleanup(hass, entry, deviceData):
             deviceData["lastDeletedRecordingsTotal"] = 0
 
         if not unique_recordings:
-            deviceData["lastCleanupResult"] = f"{sync_source} - Cleaned: No expired files"
-            deviceData["lastDeletedRecordings"] = []
+            if (
+                not deviceData.get("lastCleanupResult")
+                or deviceData.get("lastDeletedRecordingsDate") != local_today
+                or deviceData.get("lastCleanupResult") == f"{sync_source} - Cleaned: No expired files"
+            ):
+                deviceData["lastCleanupResult"] = f"{sync_source} - Cleaned: No expired files"
             LOGGER.debug(
                 "[%s Cleanup - %s] Finished cleanup: no expired recordings to remove.",
                 sync_source,
                 device_name,
             )
         else:
+            deviceData["lastMediaCleaned"] = time.time()
+            deviceData["lastDeletedRecordingsDate"] = local_today
             sync_sensor_entity_id = None
             for e in deviceData.get("entities", []):
                 entity = e.get("entity")
@@ -936,6 +958,7 @@ async def mediaCleanup(hass, entry, deviceData):
             ]
 
             downloaded_streams = deviceData.get("downloadedStreams", {})
+            cumulative_date_counts = {}
 
             for idx, batch in enumerate(batches):
                 def _process_batch_cleanup(batch_stems):
@@ -948,28 +971,41 @@ async def mediaCleanup(hass, entry, deviceData):
                             except OSError as err:
                                 LOGGER.error("Error removing %s: %s", f_path, err)
 
-                    formatted_list = format_deleted_recordings_list(
-                        hass, batch_stems, max_items=200
-                    )
-                    batch_sum = format_cleanup_summary(hass, sync_source, batch_stems)
-                    return formatted_list, batch_sum
+                    batch_date_counts = {}
+                    for stem in batch_stems:
+                        m = re.match(r"^(\d{4})[-_]?(\d{2})[-_]?(\d{2})", stem)
+                        if m:
+                            d_key = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+                            batch_date_counts[d_key] = batch_date_counts.get(d_key, 0) + 1
+                        else:
+                            batch_date_counts["other"] = batch_date_counts.get("other", 0) + 1
 
-                formatted_recordings, batch_summary = (
+                    batch_sum = format_cleanup_counts(hass, sync_source, batch_date_counts)
+                    return batch_date_counts, batch_sum
+
+                batch_date_counts, batch_summary = (
                     await hass.async_add_executor_job(_process_batch_cleanup, batch)
                 )
 
+                for d_k, c in batch_date_counts.items():
+                    cumulative_date_counts[d_k] = cumulative_date_counts.get(d_k, 0) + c
+
+                cumulative_summary = format_cleanup_counts(
+                    hass, sync_source, cumulative_date_counts
+                )
+
                 deviceData["lastDeletedRecordingsTotal"] += len(batch)
-                deviceData["lastDeletedRecordings"] = formatted_recordings
-                deviceData["lastCleanupResult"] = batch_summary
+                deviceData["lastCleanupResult"] = cumulative_summary
 
                 LOGGER.debug(
-                    "[%s Cleanup - %s] Cleaned batch %d/%d (%d items). %s",
+                    "[%s Cleanup - %s] Cleaned batch %d/%d (%d items). Batch: %s | Cumulative: %s",
                     sync_source,
                     device_name,
                     idx + 1,
                     len(batches),
                     len(batch),
                     batch_summary,
+                    cumulative_summary,
                 )
 
                 if sync_sensor_entity_id and hass.services.has_service("logbook", "log"):
@@ -1048,7 +1084,7 @@ async def deleteDir(hass, dirPath):
 
 
 async def deleteFilesOlderThan(hass: HomeAssistant, dirPath, deleteOlderThan):
-    now = datetime.datetime.utcnow().timestamp()
+    now = time.time()
     if os.path.exists(dirPath):
 
         listDirFiles = await hass.async_add_executor_job(os.listdir, dirPath)
@@ -1075,7 +1111,15 @@ def processDownloadStatus(
     date: str,
     allRecordingsCount: int,
     recordingCount: int = False,
+    item_type: str = "recording",
+    hass=None,
 ):
+    type_label = "Event" if item_type == "event" else "Recording"
+    entry_obj = entryData.get("entry")
+    sync_source = RECORDINGS_SOURCE_SD
+    if entry_obj and hasattr(entry_obj, "data"):
+        sync_source = entry_obj.data.get(RECORDINGS_SOURCE, RECORDINGS_SOURCE_SD)
+
     def processUpdate(status):
         LOGGER.debug(status)
         if isinstance(status, str):
@@ -1083,15 +1127,31 @@ def processDownloadStatus(
         else:
             action = status.get("currentAction", "")
             if action and action != "Finished download":
-                date_str = f"{date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else date
+                date_formatted = format_date_ha(hass, date) if hass else (
+                    f"{date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 else date
+                )
                 entryData["downloadProgress"] = (
-                    f"{action} {date_str}"
+                    f"{sync_source} - Downloading: {date_formatted}"
                     + (
-                        f" ({recordingCount} / {allRecordingsCount})"
+                        f" ({type_label} {recordingCount} / {allRecordingsCount})"
                         if recordingCount is not False
                         else ""
                     )
                 )
+
+                if hass:
+                    def notify_sync_sensor():
+                        for e in entryData.get("entities", []):
+                            entity = e.get("entity")
+                            if (
+                                entity
+                                and getattr(entity, "_name_suffix", "")
+                                == "Recordings Synchronization"
+                            ):
+                                entity.updateTapo(entryData.get("camData"))
+                                entity.async_schedule_update_ha_state(True)
+
+                    hass.loop.call_soon_threadsafe(notify_sync_sensor)
 
     return processUpdate
 
@@ -1301,6 +1361,7 @@ async def getRecording(
     recordingCount: int = False,
     totalRecordingCount: int = False,
     subfolder: str | None = None,
+    item_type: str = "recording",
 ) -> str:
     timeCorrection = await hass.async_add_executor_job(tapo.getTimeCorrection)
     startDate = int(startDate)
@@ -1345,6 +1406,8 @@ async def getRecording(
                 else totalRecordingCount
             ),
             recordingCount if recordingCount is not False else False,
+            item_type=item_type,
+            hass=hass,
         )
 
         entryData["isDownloadingStream"] = True

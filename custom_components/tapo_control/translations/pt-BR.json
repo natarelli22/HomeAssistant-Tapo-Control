@@ -97,10 +97,12 @@
       "media_sd_fast_options": {
         "title": "Opções do Fast Download",
         "data": {
-          "sd_sync_recording_types": "Tipos de gravação a sincronizar"
+          "sd_sync_recording_types": "Tipos de gravação a sincronizar",
+          "sd_show_online_content": "Visualizar conteúdo do cartão SD sem download"
         },
         "data_description": {
-          "sd_sync_recording_types": "Selecione quais tipos de gravação deseja sincronizar do cartão SD."
+          "sd_sync_recording_types": "Selecione quais tipos de gravação deseja sincronizar do cartão SD.",
+          "sd_show_online_content": "Quando ativado, exibe no navegador de mídia as gravações do cartão SD mesmo sem estarem baixadas, e arquivos apagados da câmera também serão removidos do Home Assistant. Quando desativado, exibe apenas gravações já baixadas e a deleção de arquivos locais ocorre exclusivamente de acordo com as horas de retenção configuradas."
         },
         "description": "Selecione quais tipos de gravação baixar do cartão SD usando o protocolo rápido.\n\n• Ambos (Eventos primeiro, depois Contínua): Baixa eventos de detecção primeiro em segundos e preenche a gravação contínua em segundo plano.\n• Apenas Eventos de Detecção: Baixa apenas quando houve movimento/pessoa detectada (clipes de 30s a 2min).\n• Apenas Gravação Contínua: Baixa apenas os blocos agendados de 30 minutos."
       },

@@ -323,6 +323,8 @@ class EventsListener:
         LOGGER.debug("EventsListener init")
         self.metaData = hass.data[DOMAIN][config_entry.entry_id]
         self.async_add_entities = async_add_entities
+        self.entities = {}
+        self._listener_attached = False
 
     def createBinarySensor(self):
         LOGGER.debug("Creating binary sensor entity.")
@@ -330,36 +332,41 @@ class EventsListener:
         events = self.metaData["events"]
         name = self.metaData["name"]
         camData = self.metaData["camData"]
-        entities = {}
         if camData:
-            entities = {
-                event.uid: TapoMotionSensor(event.uid, events, name, camData)
-                for event in events.get_platform("binary_sensor")
-            }
-            self.async_add_entities(entities.values())
-        uids_by_platform = events.get_uids_by_platform("binary_sensor")
+            new_initial = {}
+            for event in events.get_platform("binary_sensor"):
+                if event.uid not in self.entities:
+                    new_initial[event.uid] = TapoMotionSensor(event.uid, events, name, camData)
+            if new_initial:
+                self.entities.update(new_initial)
+                self.async_add_entities(new_initial.values())
 
-        @callback
-        def async_check_entities():
-            LOGGER.debug("async_check_entities")
-            nonlocal uids_by_platform
-            if not (missing := uids_by_platform.difference(entities)):
-                return
-            currentCamData = self.metaData["camData"]
-            if not currentCamData:
-                LOGGER.debug("async_check_entities - camData not ready; will retry")
-                return
-            new_entities: dict[str, TapoMotionSensor] = {
-                uid: TapoMotionSensor(uid, events, name, currentCamData)
-                for uid in missing
-            }
-            LOGGER.debug("async_check_entities2")
-            if new_entities:
-                LOGGER.debug("async_check_entities3")
-                entities.update(new_entities)
-                self.async_add_entities(new_entities.values())
+        if not self._listener_attached:
+            self._listener_attached = True
+            uids_by_platform = events.get_uids_by_platform("binary_sensor")
 
-        events.async_add_listener(async_check_entities)
+            @callback
+            def async_check_entities():
+                LOGGER.debug("async_check_entities")
+                nonlocal uids_by_platform
+                if not (missing := uids_by_platform.difference(self.entities)):
+                    return
+                currentCamData = self.metaData["camData"]
+                if not currentCamData:
+                    LOGGER.debug("async_check_entities - camData not ready; will retry")
+                    return
+                new_entities: dict[str, TapoMotionSensor] = {
+                    uid: TapoMotionSensor(uid, events, name, currentCamData)
+                    for uid in missing
+                    if uid not in self.entities
+                }
+                LOGGER.debug("async_check_entities2")
+                if new_entities:
+                    LOGGER.debug("async_check_entities3")
+                    self.entities.update(new_entities)
+                    self.async_add_entities(new_entities.values())
+
+            events.async_add_listener(async_check_entities)
 
 
 class TapoMotionSensor(BinarySensorEntity):

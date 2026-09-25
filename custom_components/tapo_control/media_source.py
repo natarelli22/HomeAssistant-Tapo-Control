@@ -66,6 +66,7 @@ from .const import (
     SD_SYNC_RECORDING_TYPES_CONTINUOUS,
     SUBDIR_EVENTS,
     SUBDIR_CONTINUOUS,
+    SD_SHOW_ONLINE_CONTENT,
 )
 from .utils import (
     getColdDirPathForEntry,
@@ -783,7 +784,7 @@ class TapoMediaSource(MediaSource):
 
         dates_map = self._get_camera_dates(camera_path) if camera_path else {}
 
-        # In Fast Download mode, ensure all SD card recording dates are displayed even before downloading
+        # In Fast Download mode, ensure all SD card recording dates are displayed even before downloading (if enabled)
         if entry_id and entry_id in self.hass.data.get(DOMAIN, {}):
             entry_data = self.hass.data[DOMAIN][entry_id]
             config_entry = entry_data.get("entry")
@@ -792,7 +793,16 @@ class TapoMediaSource(MediaSource):
                 if config_entry
                 else SD_DOWNLOAD_METHOD_LEGACY
             )
-            if download_method == SD_DOWNLOAD_METHOD_FAST and "controller" in entry_data:
+            show_online_content = (
+                config_entry.data.get(SD_SHOW_ONLINE_CONTENT, True)
+                if config_entry
+                else True
+            )
+            if (
+                download_method == SD_DOWNLOAD_METHOD_FAST
+                and show_online_content
+                and "controller" in entry_data
+            ):
                 try:
                     tapo_controller = entry_data["controller"]
                     rec_list = tapo_controller.getRecordingsList()
@@ -955,9 +965,14 @@ class TapoMediaSource(MediaSource):
 
             seen_items: set[tuple[int, int]] = set()
             items_list: list[dict[str, Any]] = []
+            show_online_content = (
+                config_entry.data.get(SD_SHOW_ONLINE_CONTENT, True)
+                if config_entry
+                else True
+            )
 
-            # 1. Query recordings directly from camera SD card if controller is available
-            if entry_data and "controller" in entry_data:
+            # 1. Query recordings directly from camera SD card if controller is available (if enabled)
+            if show_online_content and entry_data and "controller" in entry_data:
                 try:
                     tapo_controller = entry_data["controller"]
                     date_api = date.replace("-", "").replace("_", "")

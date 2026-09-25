@@ -465,15 +465,11 @@ class TapoSyncSensor(TapoSensorEntity):
         media_sync_hours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
         if media_sync_hours:
             attributes["retention_hours"] = media_sync_hours
-        last_cleanup = data.get("lastMediaCleanup")
+        last_cleanup = data.get("lastMediaCleaned") or data.get("lastMediaCleanup")
         if last_cleanup:
             attributes["last_cleanup"] = (
                 dt_util.utc_from_timestamp(last_cleanup).isoformat()
             )
-        attributes["last_deleted_recordings"] = data.get("lastDeletedRecordings", [])
-        attributes["last_deleted_recordings_total"] = data.get(
-            "lastDeletedRecordingsTotal", 0
-        )
         attributes["last_cleanup_result"] = data.get(
             "lastCleanupResult", "No cleanup performed yet"
         )

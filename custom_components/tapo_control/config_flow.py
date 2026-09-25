@@ -58,6 +58,7 @@ from .const import (
     SD_SYNC_RECORDING_TYPES,
     SD_SYNC_RECORDING_TYPES_BOTH,
     SD_SYNC_RECORDING_TYPES_OPTIONS,
+    SD_SHOW_ONLINE_CONTENT,
     REPORTED_IP_ADDRESS,
     DOORBELL_UDP_DISCOVERED,
     SOUND_DETECTION_DURATION,
@@ -1670,7 +1671,7 @@ class TapoOptionsFlowHandler(OptionsFlow):
         )
 
     async def async_step_media_sd_fast_options(self, user_input=None):
-        """Configure recording types for fast download mode."""
+        """Configure recording types and SD browsing for fast download mode."""
         errors = {}
         all_config = getattr(self, "_temp_media_sd_data", None)
         if all_config is None:
@@ -1679,10 +1680,16 @@ class TapoOptionsFlowHandler(OptionsFlow):
         current_sync_type = self.config_entry.data.get(
             SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
         )
+        current_show_online = self.config_entry.data.get(
+            SD_SHOW_ONLINE_CONTENT, True
+        )
 
         if user_input is not None:
             all_config[SD_SYNC_RECORDING_TYPES] = user_input.get(
                 SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
+            )
+            all_config[SD_SHOW_ONLINE_CONTENT] = bool(
+                user_input.get(SD_SHOW_ONLINE_CONTENT, True)
             )
             self.hass.config_entries.async_update_entry(
                 self.config_entry,
@@ -1706,6 +1713,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                             }
                         }
                     ),
+                    vol.Required(
+                        SD_SHOW_ONLINE_CONTENT,
+                        description={"suggested_value": current_show_online},
+                    ): selector({"boolean": {}}),
                 }
             ),
             errors=errors,
