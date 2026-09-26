@@ -1272,28 +1272,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         # Needs to execute AFTER binary_sensor creation!
         if (
-            tapoController.isKLAP is False
-            and camData["childDevices"] is None
+            camData["childDevices"] is None
             and (motionSensor or enableTimeSync)
         ):
             onvifDevice = await initOnvifEvents(hass, host, username, password)
-            hass.data[DOMAIN][entry.entry_id]["eventsDevice"] = onvifDevice["device"]
-            hass.data[DOMAIN][entry.entry_id]["onvifManagement"] = onvifDevice[
-                "device_mgmt"
-            ]
-            if motionSensor:
-                LOGGER.debug("Setting up motion sensor for the first time.")
-                await setupOnvif(hass, entry)
-            else:
-                debugMsg = "Motion sensor is disabled."
-                if len(username) == 0 or len(password) == 0:
-                    debugMsg += " This is because RTSP username or password is empty."
-                LOGGER.debug(debugMsg)
-            if enableTimeSync:
-                try:
-                    await syncTime(hass, entry.entry_id)
-                except Exception as e:
-                    handleTimeSyncError(e)
+            if onvifDevice:
+                hass.data[DOMAIN][entry.entry_id]["eventsDevice"] = onvifDevice["device"]
+                hass.data[DOMAIN][entry.entry_id]["onvifManagement"] = onvifDevice[
+                    "device_mgmt"
+                ]
+                if motionSensor:
+                    LOGGER.debug("Setting up motion sensor for the first time.")
+                    await setupOnvif(hass, entry)
+                else:
+                    debugMsg = "Motion sensor is disabled."
+                    if len(username) == 0 or len(password) == 0:
+                        debugMsg += " This is because RTSP username or password is empty."
+                    LOGGER.debug(debugMsg)
+                if enableTimeSync:
+                    try:
+                        await syncTime(hass, entry.entry_id)
+                    except Exception as e:
+                        handleTimeSyncError(e)
 
         # Media sync
         timeCorrection = await hass.async_add_executor_job(

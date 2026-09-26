@@ -75,6 +75,7 @@ from .const import (
     TIME_SYNC_DST,
     TIME_SYNC_NDST,
     TPLINK_DOMAIN,
+    IS_KLAP_DEVICE,
 )
 
 UUID = uuid.uuid4().hex
@@ -2727,6 +2728,7 @@ async def update_listener(hass, entry):
     motionSensor = entry.data.get(ENABLE_MOTION_SENSOR)
     enableTimeSync = entry.data.get(ENABLE_TIME_SYNC)
     cloud_password = entry.data.get(CLOUD_PASSWORD)
+    isKlapDevice = entry.data.get(IS_KLAP_DEVICE)
     try:
         newUUID = hashlib.md5(
             (str(host) + str(username) + str(password) + str(cloud_password)).encode()
@@ -2748,10 +2750,10 @@ async def update_listener(hass, entry):
                     controlPort,
                     "admin",
                     cloud_password,
-                    "",
+                    cloud_password,
                     "",
                     None,
-                    None,
+                    isKlapDevice,
                     hass,
                 )
             else:
@@ -2764,7 +2766,7 @@ async def update_listener(hass, entry):
                     "",
                     "",
                     None,
-                    None,
+                    isKlapDevice,
                     hass,
                 )
             hass.data[DOMAIN][entry.entry_id]["usingCloudPassword"] = (
@@ -2792,12 +2794,13 @@ async def update_listener(hass, entry):
         hass.data[DOMAIN][entry.entry_id]["motionSensorCreated"] = False
     if motionSensor or enableTimeSync:
         onvifDevice = await initOnvifEvents(hass, host, username, password)
-        hass.data[DOMAIN][entry.entry_id]["eventsDevice"] = onvifDevice["device"]
-        hass.data[DOMAIN][entry.entry_id]["onvifManagement"] = onvifDevice[
-            "device_mgmt"
-        ]
-        if motionSensor:
-            await setupOnvif(hass, entry)
+        if onvifDevice:
+            hass.data[DOMAIN][entry.entry_id]["eventsDevice"] = onvifDevice["device"]
+            hass.data[DOMAIN][entry.entry_id]["onvifManagement"] = onvifDevice[
+                "device_mgmt"
+            ]
+            if motionSensor:
+                await setupOnvif(hass, entry)
 
     if entry.entry_id in hass.data.get(DOMAIN, {}):
         hass.data[DOMAIN][entry.entry_id]["mediaSyncColdDir"] = False
