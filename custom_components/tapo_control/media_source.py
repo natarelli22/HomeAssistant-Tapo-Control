@@ -1220,6 +1220,7 @@ class TapoMediaSource(MediaSource):
         camera = query.get("camera")
         date = query.get("date")
         file = query.get("file")
+        subfolder = query.get("subfolder") or query.get("category")
 
         file_path: Path | None = None
         if video_path_str:
@@ -1234,7 +1235,12 @@ class TapoMediaSource(MediaSource):
                     cam_path = Path(cameras[camera]["path"])
 
             if cam_path and file:
-                file_path = cam_path / "videos" / date / file if date else cam_path / "videos" / file
+                if subfolder:
+                    file_path = cam_path / "videos" / subfolder / file
+                elif date:
+                    file_path = cam_path / "videos" / date / file
+                else:
+                    file_path = cam_path / "videos" / file
 
         # Check if file actually exists on disk
         file_exists = False
@@ -1264,7 +1270,6 @@ class TapoMediaSource(MediaSource):
         if not file_exists:
             start_date = query.get("startDate")
             end_date = query.get("endDate")
-            subfolder = query.get("subfolder") or query.get("category")
             config_entry = (
                 self.hass.config_entries.async_get_entry(entry_id) if entry_id else None
             )
@@ -1273,6 +1278,13 @@ class TapoMediaSource(MediaSource):
                 if config_entry
                 else SD_DOWNLOAD_METHOD_LEGACY
             )
+
+            if not subfolder and dl_method == SD_DOWNLOAD_METHOD_FAST and start_date and end_date:
+                try:
+                    duration = int(end_date) - int(start_date)
+                    subfolder = SUBDIR_CONTINUOUS if duration >= 900 else SUBDIR_EVENTS
+                except Exception:
+                    subfolder = SUBDIR_EVENTS
 
             if (
                 dl_method == SD_DOWNLOAD_METHOD_FAST

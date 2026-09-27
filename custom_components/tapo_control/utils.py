@@ -315,27 +315,40 @@ async def findMedia(hass, entryData, entry):
             )
             for recording in recordingsForDay:
                 for recordingKey in recording:
+                    rec_item = recording[recordingKey]
+                    startTime = rec_item["startTime"]
+                    endTime = rec_item["endTime"]
+                    sf = get_recording_subfolder(rec_item)
+                    if sf == SUBDIR_EVENTS:
+                        try:
+                            if (int(endTime) - int(startTime)) >= 900:
+                                sf = SUBDIR_CONTINUOUS
+                        except Exception:
+                            pass
+
                     filePathVideo = getColdFile(
                         hass,
                         entry_id,
-                        recording[recordingKey]["startTime"],
-                        recording[recordingKey]["endTime"],
+                        startTime,
+                        endTime,
                         "videos",
                         childID=childID,
+                        subfolder=sf,
                     )
                     mediaScanResult[
                         ((childID + "-") if childID != "" else "")
-                        + str(recording[recordingKey]["startTime"])
+                        + str(startTime)
                         + "-"
-                        + str(recording[recordingKey]["endTime"])
+                        + str(endTime)
                     ] = True
                     if os.path.exists(filePathVideo):
                         await processDownload(
                             hass,
                             entry_id,
                             entryData,
-                            recording[recordingKey]["startTime"],
-                            recording[recordingKey]["endTime"],
+                            startTime,
+                            endTime,
+                            subfolder=sf,
                         )
     LOGGER.debug("Found media for " + entryData["name"] + ".")
     entryData["mediaScanResult"] = mediaScanResult
@@ -1071,6 +1084,9 @@ async def mediaCleanup(hass, entry, deviceData):
 
         await hass.async_add_executor_job(_clean_subdirs)
 
+        if entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY) == SD_DOWNLOAD_METHOD_FAST:
+            await hass.async_add_executor_job(reorganize_media_storage, hass, entry_id)
+
         # Delete everything other than HOT_DIR_DELETE_TIME seconds from hot storage
         LOGGER.debug(
             "Deleting hot storage files older than "
@@ -1225,15 +1241,35 @@ def getColdFile(
     entry_data = entry.data if entry else {}
     download_method = entry_data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
 
-    # In Fast mode, use subfolder if provided
-    if download_method == SD_DOWNLOAD_METHOD_FAST and subfolder:
-        sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
-        # Retrocompatibility: if file exists in root, return it
-        if not os.path.exists(sub_path):
-            root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-            if os.path.exists(root_path):
-                return root_path
-        return sub_path
+    # In Fast mode, use subfolder structure
+    if download_method == SD_DOWNLOAD_METHOD_FAST:
+        if subfolder:
+            sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
+            # Retrocompatibility: if file exists in root, return it
+            if not os.path.exists(sub_path):
+                root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+                if os.path.exists(root_path):
+                    return root_path
+            return sub_path
+
+        # If subfolder is not specified in Fast mode, first check existing files in subfolders
+        events_path = os.path.join(coldDirPath, folder, SUBDIR_EVENTS, f"{fileName}{extension}")
+        if os.path.exists(events_path):
+            return events_path
+        cont_path = os.path.join(coldDirPath, folder, SUBDIR_CONTINUOUS, f"{fileName}{extension}")
+        if os.path.exists(cont_path):
+            return cont_path
+        root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+        if os.path.exists(root_path):
+            return root_path
+
+        # If file does not exist yet, infer subfolder based on duration (>= 15 min is continuous)
+        try:
+            duration = int(endDate) - int(startDate)
+            inferred = SUBDIR_CONTINUOUS if duration >= 900 else SUBDIR_EVENTS
+        except Exception:
+            inferred = SUBDIR_EVENTS
+        return os.path.join(coldDirPath, folder, inferred, f"{fileName}{extension}")
 
     # In Legacy mode (or without subfolder), use traditional root path
     root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
@@ -1265,6 +1301,14 @@ def reorganize_media_storage(hass: HomeAssistant, entry_id: str) -> None:
             events_tdir = os.path.join(thumbs_dir, SUBDIR_EVENTS)
             cont_tdir = os.path.join(thumbs_dir, SUBDIR_CONTINUOUS)
 
+            entry_data = (
+                hass.data.get(DOMAIN, {}).get(entry_id, {})
+                if hass
+                else {}
+            )
+            is_downloading = entry_data.get("isDownloadingStream", False)
+            now = time.time()
+
             try:
                 for fname in os.listdir(videos_dir):
                     fpath = os.path.join(videos_dir, fname)
@@ -1292,6 +1336,25 @@ def reorganize_media_storage(hass: HomeAssistant, entry_id: str) -> None:
                             dest_thumb = os.path.join(target_tdir, thumb_name)
                             if not os.path.exists(dest_thumb):
                                 shutil.move(root_thumb, dest_thumb)
+                    elif (
+                        not is_downloading
+                        and os.path.isfile(fpath)
+                        and (
+                            fname.endswith(".mp4.ts")
+                            or fname.endswith(".tmp.ts")
+                            or fname.endswith(".tmp.mp4")
+                        )
+                    ):
+                        try:
+                            # Only delete orphaned temporary files older than 10 minutes (600s)
+                            if (now - os.path.getmtime(fpath)) > 600:
+                                os.remove(fpath)
+                                LOGGER.info(
+                                    "[Storage Cleanup] Removed stale temporary file: %s",
+                                    fname,
+                                )
+                        except OSError as err:
+                            LOGGER.debug("Could not remove stale file %s: %s", fpath, err)
             except Exception as err:
                 LOGGER.error("Error during storage migration to Fast mode: %s", err)
 
@@ -1337,9 +1400,10 @@ async def getHotFile(
     endDate: int,
     folder: str,
     childID="",
+    subfolder: str | None = None,
 ):
     coldFilePath = getColdFile(
-        hass, entry_id, startDate, endDate, folder, childID=childID
+        hass, entry_id, startDate, endDate, folder, childID=childID, subfolder=subfolder
     )
     hotDirPath = getHotDirPathForEntry(hass, entry_id)
     extension = pathlib.Path(coldFilePath).suffix
@@ -1360,9 +1424,10 @@ async def getWebFile(
     endDate: int,
     folder: str,
     childID="",
+    subfolder: str | None = None,
 ):
     hotFilePath = await getHotFile(
-        hass, entry_id, startDate, endDate, folder, childID=childID
+        hass, entry_id, startDate, endDate, folder, childID=childID, subfolder=subfolder
     )
     fileWebPath = hotFilePath[hotFilePath.index("/www/") + 5 :]  # remove ./www/
 
@@ -1495,18 +1560,39 @@ async def getRecording(
         if downloadedFile is None:
             if entryData.get("sdDownloadMethod") != "Legacy (Fallback)":
                 entryData["sdDownloadMethod"] = "Legacy (Playback)"
+            target_video_dir = (
+                os.path.dirname(coldFilePath) + "/"
+                if selected_download_method == SD_DOWNLOAD_METHOD_FAST
+                else coldDirPath + "/videos/"
+            )
+            os.makedirs(target_video_dir, exist_ok=True)
             downloader = Downloader(
                 tapo,
                 startDate,
                 endDate,
                 timeCorrection,
-                coldDirPath + "/videos/",
+                target_video_dir,
                 0,
                 None,
                 None,
                 downloadUID + ".mp4",
             )
-            downloadedFile = await downloader.downloadFile(status_callback)
+            temp_ts = os.path.join(target_video_dir, downloadUID + ".mp4.ts")
+            try:
+                downloadedFile = await downloader.downloadFile(status_callback)
+            finally:
+                if (
+                    selected_download_method == SD_DOWNLOAD_METHOD_FAST
+                    and os.path.exists(temp_ts)
+                ):
+                    try:
+                        os.remove(temp_ts)
+                        LOGGER.warning(
+                            "[Download Fallback] Cleaned orphaned temporary file: %s",
+                            temp_ts,
+                        )
+                    except Exception as clean_err:
+                        LOGGER.debug("Could not remove temp ts file: %s", clean_err)
 
         entryData["isDownloadingStream"] = False
         if downloadedFile.get("currentAction") == "Recording in progress":
