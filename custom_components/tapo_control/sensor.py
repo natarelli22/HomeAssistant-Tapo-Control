@@ -3,6 +3,7 @@
 import datetime
 import os
 import re
+import time
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
@@ -20,6 +21,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     DOMAIN,
     ENABLE_MEDIA_SYNC,
+    ENABLE_MEDIA_CLEANUP,
     LOGGER,
     MEDIA_SYNC_COLD_STORAGE_PATH,
     MEDIA_SYNC_HOURS,
@@ -31,6 +33,7 @@ from .const import (
     SD_DOWNLOAD_METHOD,
     SD_DOWNLOAD_METHOD_LEGACY,
     SD_DOWNLOAD_METHOD_FAST,
+    SD_CHECK_GO2RTC_SESSION,
 )
 from .tapo.entities import TapoSensorEntity
 
@@ -370,6 +373,7 @@ class TapoSyncSensor(TapoSensorEntity):
             return
 
         enable_media_sync = data.get(ENABLE_MEDIA_SYNC, False)
+        enable_media_cleanup = data.get(ENABLE_MEDIA_CLEANUP, False)
         runningMediaSync = data.get("runningMediaSync", False)
 
         sync_source = self._config_entry.data.get(
@@ -383,11 +387,21 @@ class TapoSyncSensor(TapoSensorEntity):
 
         if sync_source == RECORDINGS_SOURCE_TAPO_CARE:
             cold_storage_path = self._config_entry.data.get(MEDIA_SYNC_COLD_STORAGE_PATH)
-            storage_exists = bool(
-                cold_storage_path
-                and os.path.exists(cold_storage_path)
-                and os.path.isdir(cold_storage_path)
-            )
+            now_mono = time.monotonic()
+            if (
+                not hasattr(self, "_cached_storage_exists")
+                or getattr(self, "_last_storage_check", 0) + 60 < now_mono
+                or getattr(self, "_checked_storage_path", None) != cold_storage_path
+            ):
+                self._cached_storage_exists = bool(
+                    cold_storage_path
+                    and os.path.exists(cold_storage_path)
+                    and os.path.isdir(cold_storage_path)
+                )
+                self._last_storage_check = now_mono
+                self._checked_storage_path = cold_storage_path
+
+            storage_exists = self._cached_storage_exists
 
             if not enable_media_sync:
                 self._attr_native_value = "Tapo Care - Disabled"
@@ -405,6 +419,8 @@ class TapoSyncSensor(TapoSensorEntity):
             attributes = {
                 "storage_mode": RECORDINGS_SOURCE_TAPO_CARE,
                 "sync_enabled": bool(enable_media_sync),
+                "cleanup_enabled": bool(enable_media_cleanup),
+                "media_cleanup_available": bool(data.get("mediaCleanupAvailable", True)),
                 "cold_storage_path": cold_storage_path,
                 "cold_storage_found": storage_exists,
             }
@@ -432,7 +448,21 @@ class TapoSyncSensor(TapoSensorEntity):
             LOGGER.debug("Media Sync Schedueled: %s", data.get("mediaSyncScheduled"))
             LOGGER.debug("Media Sync Ran Once: %s", data.get("mediaSyncRanOnce"))
 
-            if enable_media_sync or runningMediaSync is True:
+            now_ts = dt_util.now().timestamp()
+            delay_msg = data.get("downloadDelayedProgress") or (
+                data.get("downloadProgress")
+                if "delayed" in str(data.get("downloadProgress", "")).lower()
+                else None
+            )
+            is_delayed = bool(
+                data.get("fastDownloadDelayedUntil", 0) > now_ts
+                and delay_msg
+            )
+
+            if is_delayed:
+                self._attr_native_value = delay_msg
+                self._attr_icon = "mdi:clock-alert-outline"
+            elif enable_media_sync or runningMediaSync is True:
                 if not data.get("initialMediaScanDone") or (
                     data.get("initialMediaScanDone") and not data.get("mediaSyncRanOnce")
                 ):
@@ -459,12 +489,38 @@ class TapoSyncSensor(TapoSensorEntity):
                 "storage_mode": RECORDINGS_SOURCE_SD,
                 "sync_enabled": bool(enable_media_sync),
                 "media_sync_available": data.get("mediaSyncAvailable", True),
-                "download_progress": data.get("downloadProgress") if runningMediaSync else "Idle",
+                "cleanup_enabled": bool(enable_media_cleanup),
+                "media_cleanup_available": bool(data.get("mediaCleanupAvailable", True)),
+                "download_progress": (
+                    delay_msg
+                    if is_delayed
+                    else (
+                        data.get("downloadProgress")
+                        if runningMediaSync
+                        else "Idle"
+                    )
+                ),
             }
             if data.get("sdDownloadMethod"):
                 attributes["sd_download_method"] = data["sdDownloadMethod"]
             if data.get("lastDownloadWarning"):
                 attributes["last_download_warning"] = data["lastDownloadWarning"]
+
+            if self._config_entry.data.get(SD_CHECK_GO2RTC_SESSION, True):
+                attributes["go2rtc_check_enabled"] = True
+                attributes["go2rtc_active"] = bool(data.get("go2rtcActive", False))
+                if data.get("go2rtcConsumers"):
+                    attributes["go2rtc_consumers"] = data["go2rtcConsumers"]
+                if data.get("go2rtcStream"):
+                    attributes["go2rtc_stream"] = data["go2rtcStream"]
+                if is_delayed:
+                    delayed_until_ts = data["fastDownloadDelayedUntil"]
+                    attributes["fast_download_delayed_until"] = (
+                        dt_util.utc_from_timestamp(delayed_until_ts).isoformat()
+                    )
+                    attributes["delay_remaining_minutes"] = max(
+                        1, int((delayed_until_ts - now_ts) / 60)
+                    )
 
             download_method = self._config_entry.data.get(
                 SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY

@@ -11,7 +11,8 @@
   "iot_class": "local_polling",
   "requirements": [
     "pytapo==3.4.19",
-    "python-kasa[speedups]==0.10.2"
+    "python-kasa[speedups]==0.10.2",
+    "pycryptodome>=3.20.0"
   ],
   "dependencies": [
     "ffmpeg",

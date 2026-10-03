@@ -31,7 +31,11 @@ LOGGER = logging.getLogger(__name__)
 CLIENT_BOUNDARY = b"--client-stream-boundary--"
 DEFAULT_DEVICE_BOUNDARY = b"--device-stream-boundary--"
 TS_PACKET = 188
-PLAYER_ID = uuid.uuid4().hex.upper()
+
+
+def generate_player_id() -> str:
+    """Generate a unique hex player identifier for the session."""
+    return uuid.uuid4().hex.upper()
 
 
 class FastMediaError(Exception):
@@ -88,7 +92,10 @@ class ClipDemuxer:
     def video_seconds(self) -> float:
         if self.first_video_pts is None or self.last_video_pts is None:
             return 0.0
-        return ((self.last_video_pts - self.first_video_pts) & 0x1FFFFFFFF) / 90000.0
+        diff = (self.last_video_pts - self.first_video_pts) & 0x1FFFFFFFF
+        if diff > 0x100000000:
+            return 0.0
+        return diff / 90000.0
 
     @property
     def audio_offset(self) -> float:
@@ -361,7 +368,7 @@ def _control(data: bytes) -> tuple[bool, int | None]:
     return finished, None
 
 
-def fetch_snapshot(sess: MediaSession, start: int) -> bytes | None:
+def fetch_snapshot(sess: MediaSession, start: int, player_id: str | None = None) -> bytes | None:
     """Fetch camera JPEG snapshot for the recording starting at `start`."""
     sess.request(
         {
@@ -370,7 +377,7 @@ def fetch_snapshot(sess: MediaSession, start: int) -> bytes | None:
                 "channels": [0],
                 "media_type": 2,
                 "start_time": str(int(start)),
-                "player_id": PLAYER_ID,
+                "player_id": player_id or generate_player_id(),
             },
             "method": "get",
         }
@@ -392,6 +399,7 @@ def stream_clip(
     end: int,
     demux: ClipDemuxer,
     *,
+    player_id: str | None = None,
     should_stop: Callable[[], bool] = lambda: False,
     on_data: Callable[[], None] | None = None,
     overrun: float = 5.0,
@@ -406,7 +414,7 @@ def stream_clip(
                 "media_type": 0,
                 "start_time": str(int(start)),
                 "end_time": str(int(end)),
-                "player_id": PLAYER_ID,
+                "player_id": player_id or generate_player_id(),
             },
             "method": "get",
         }
@@ -473,15 +481,14 @@ class FastDownloader:
         with tempfile.TemporaryDirectory(prefix="tapo_fast_") as tmpdir:
             temp_ts = os.path.join(tmpdir, "clip.ts")
             temp_audio = os.path.join(tmpdir, f"clip.{self.audio_format}")
-
-            last_progress_time = 0.0
-
             with open(temp_ts, "wb") as fv, open(temp_audio, "wb") as fa:
                 demux = ClipDemuxer(fv.write, fa.write)
 
                 with MediaSession(self.host, self.cloud_password, port=self.port) as sess:
-                    stream_clip(sess, self.startDate, self.endDate, demux)
-                    sess.stop()
+                    try:
+                        stream_clip(sess, self.startDate, self.endDate, demux)
+                    finally:
+                        sess.stop()
 
             if not os.path.exists(temp_ts) or os.path.getsize(temp_ts) == 0:
                 raise FastMediaError("No video data received from camera")
@@ -525,11 +532,19 @@ class FastDownloader:
 
             cmd.extend(["-movflags", "+faststart", temp_mp4])
 
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode != 0:
-                raise FastMediaError(f"ffmpeg remux failed: {res.stderr}")
-
-            shutil.move(temp_mp4, self.output_video_path)
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+                if res.returncode != 0:
+                    raise FastMediaError(f"ffmpeg remux failed: {res.stderr}")
+                shutil.move(temp_mp4, self.output_video_path)
+            except subprocess.TimeoutExpired as exc:
+                raise FastMediaError("ffmpeg remux timed out after 120s") from exc
+            finally:
+                if os.path.exists(temp_mp4):
+                    try:
+                        os.remove(temp_mp4)
+                    except OSError:
+                        pass
 
             # Try to fetch native thumbnail if target thumb path is requested
             if self.output_thumb_path and not os.path.exists(self.output_thumb_path):
@@ -543,21 +558,10 @@ class FastDownloader:
                 except Exception as thumb_err:
                     LOGGER.debug("Could not fetch native snapshot: %s", thumb_err)
 
-        # Calculate md5
-        md5_hash = ""
-        try:
-            with open(self.output_video_path, "rb") as f_out:
-                md5_hash = hashlib.md5(f_out.read()).hexdigest()
-        except OSError:
-            pass
-
-
-
         return {
             "currentAction": "Finished download",
             "fileName": self.output_video_path,
             "progress": segment_length,
             "total": segment_length,
-            "md5": md5_hash,
         }
 

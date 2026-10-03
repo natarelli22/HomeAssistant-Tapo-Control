@@ -10,11 +10,12 @@ import socket
 import urllib.parse
 import uuid
 import requests
-import base64
 import time
+import aiohttp
 
 from functools import partial
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from pytapo.media_stream.downloader import Downloader
@@ -49,6 +50,7 @@ from .const import (
     CONTROL_PORT,
     DOMAIN_CONFIG,
     ENABLE_MEDIA_SYNC,
+    ENABLE_MEDIA_CLEANUP,
     ENABLE_MOTION_SENSOR,
     DOMAIN,
     ENABLE_WEBHOOKS,
@@ -72,6 +74,8 @@ from .const import (
     SUBDIR_EVENTS,
     SUBDIR_CONTINUOUS,
     SD_SHOW_ONLINE_CONTENT,
+    SD_CHECK_GO2RTC_SESSION,
+    GO2RTC_BUSY_DELAY_SECONDS,
     TIME_SYNC_DST,
     TIME_SYNC_NDST,
     TPLINK_DOMAIN,
@@ -359,7 +363,8 @@ async def findMedia(hass, entryData, entry):
         SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
     )
     if not (entry_download_method == SD_DOWNLOAD_METHOD_FAST and fast_cleanup_time):
-        await mediaCleanup(hass, entry, entryData)
+        if entryData.get(ENABLE_MEDIA_CLEANUP, False):
+            await mediaCleanup(hass, entry, entryData)
 
 
 async def processDownload(
@@ -439,10 +444,12 @@ async def generateThumb(
                 output_format=IMAGE_JPEG,
             )
         )
-        os.makedirs(os.path.dirname(filePathThumb), exist_ok=True)
-        openHandler = await hass.async_add_executor_job(open, filePathThumb, "wb")
-        with openHandler as binary_file:
-            binary_file.write(image)
+        def _write_thumb_file(path, data):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as binary_file:
+                binary_file.write(data)
+
+        await hass.async_add_executor_job(_write_thumb_file, filePathThumb, image)
     return filePathThumb
 
 
@@ -873,6 +880,14 @@ async def mediaCleanup(hass, entry, deviceData):
     if not device_name:
         device_name = entry.title or entry_id
 
+    enable_media_cleanup = deviceData.get(ENABLE_MEDIA_CLEANUP, False)
+    if not enable_media_cleanup:
+        LOGGER.debug(
+            "Media cleanup for %s is disabled (switch is off). Skipping cleanup.",
+            device_name,
+        )
+        return
+
     LOGGER.debug(
         "Initiating media cleanup for entity "
         + entry_id
@@ -1119,26 +1134,95 @@ async def deleteDir(hass, dirPath):
 
 
 async def deleteFilesOlderThan(hass: HomeAssistant, dirPath, deleteOlderThan):
-    now = time.time()
-    if os.path.exists(dirPath):
+    def _sync_delete_older():
+        now = time.time()
+        if os.path.exists(dirPath):
+            try:
+                for f in os.listdir(dirPath):
+                    filePath = os.path.join(dirPath, f)
+                    try:
+                        if os.path.isfile(filePath):
+                            last_modified = os.stat(filePath).st_mtime
+                            if now - last_modified > deleteOlderThan:
+                                LOGGER.debug("[deleteFilesOlderThan] Removing %s...", filePath)
+                                os.remove(filePath)
+                    except OSError as err:
+                        LOGGER.debug("Could not inspect/remove %s: %s", filePath, err)
+            except OSError as err:
+                LOGGER.debug("Could not list directory %s: %s", dirPath, err)
 
-        listDirFiles = await hass.async_add_executor_job(os.listdir, dirPath)
-        for f in listDirFiles:
-            filePath = os.path.join(dirPath, f)
-            last_modified = os.stat(filePath).st_mtime
-            if now - last_modified > deleteOlderThan:
-                LOGGER.debug("[deleteFilesOlderThan] Removing " + filePath + "...")
-                os.remove(filePath)
+    await hass.async_add_executor_job(_sync_delete_older)
 
 
 async def deleteFilesNotIncluding(hass: HomeAssistant, dirPath, includingString):
-    if os.path.exists(dirPath):
-        listDirFiles = await hass.async_add_executor_job(os.listdir, dirPath)
-        for f in listDirFiles:
-            filePath = os.path.join(dirPath, f)
-            if includingString not in filePath:
-                LOGGER.debug("[deleteFilesOlderThan] Removing " + filePath + "...")
-                os.remove(filePath)
+    def _sync_delete_not_including():
+        if os.path.exists(dirPath):
+            try:
+                for f in os.listdir(dirPath):
+                    filePath = os.path.join(dirPath, f)
+                    if includingString not in filePath:
+                        try:
+                            if os.path.isfile(filePath):
+                                LOGGER.debug("[deleteFilesNotIncluding] Removing %s...", filePath)
+                                os.remove(filePath)
+                        except OSError as err:
+                            LOGGER.debug("Could not remove %s: %s", filePath, err)
+            except OSError as err:
+                LOGGER.debug("Could not list directory %s: %s", dirPath, err)
+
+    await hass.async_add_executor_job(_sync_delete_not_including)
+
+
+async def async_get_go2rtc_camera_status(
+    hass: HomeAssistant, camera_ip: str
+) -> dict:
+    """Check go2rtc API for active streaming sessions (consumers > 0) matching the camera IP."""
+    if not camera_ip or not hass:
+        return {"available": False, "is_busy": False, "consumers": 0, "stream_id": None}
+
+    base_url = "http://127.0.0.1:1984"
+    try:
+        webrtc_entries = hass.config_entries.async_entries("webrtc")
+        if webrtc_entries:
+            configured_url = webrtc_entries[0].data.get("url")
+            if configured_url:
+                base_url = configured_url.rstrip("/")
+    except Exception:
+        pass
+
+    session = async_get_clientsession(hass)
+    try:
+        async with session.get(
+            f"{base_url}/api/streams",
+            timeout=aiohttp.ClientTimeout(total=2.0),
+        ) as resp:
+            if resp.status != 200:
+                return {"available": False, "is_busy": False, "consumers": 0, "stream_id": None}
+            data = await resp.json()
+    except Exception:
+        return {"available": False, "is_busy": False, "consumers": 0, "stream_id": None}
+
+    if not isinstance(data, dict):
+        return {"available": True, "is_busy": False, "consumers": 0, "stream_id": None}
+
+    for stream_id, stream_info in data.items():
+        if not isinstance(stream_info, dict):
+            continue
+        producers = stream_info.get("producers", [])
+        matches_camera = any(
+            camera_ip in str(prod.get("url", "")) for prod in producers if isinstance(prod, dict)
+        )
+        if matches_camera:
+            consumers = stream_info.get("consumers", [])
+            if isinstance(consumers, list) and len(consumers) > 0:
+                return {
+                    "available": True,
+                    "is_busy": True,
+                    "consumers": len(consumers),
+                    "stream_id": stream_id,
+                }
+
+    return {"available": True, "is_busy": False, "consumers": 0, "stream_id": None}
 
 
 def processDownloadStatus(
@@ -1468,18 +1552,82 @@ async def getRecording(
         subfolder=subfolder,
     )
     if not os.path.exists(coldFilePath):
-        # this NEEDS to happen otherwise camera does not send data!
-        allRecordings = await hass.async_add_executor_job(tapo.getRecordings, date)
-
         entry = hass.config_entries.async_get_entry(entry_id)
         entry_data_dict = entry.data if entry else {}
         selected_download_method = entry_data_dict.get(
             SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
         )
 
+        now_ts = time.time()
+        if (
+            selected_download_method == SD_DOWNLOAD_METHOD_FAST
+            and entryData.get("fastDownloadDelayedUntil", 0) > now_ts
+        ):
+            return None
+
         device_name = entryData.get("camData", {}).get("basic_info", {}).get("device_alias")
         if not device_name:
             device_name = getattr(entry, "title", None) or entry_id
+
+        if selected_download_method == SD_DOWNLOAD_METHOD_FAST and entry_data_dict.get(SD_CHECK_GO2RTC_SESSION, True):
+            camera_host = (
+                getattr(tapo, "host", None)
+                or entryData.get("camData", {}).get("basic_info", {}).get("ip")
+            )
+            go2rtc_status = await async_get_go2rtc_camera_status(hass, camera_host)
+            if go2rtc_status.get("is_busy"):
+                date_formatted = (
+                    format_date_ha(hass, date)
+                    if hass
+                    else (
+                        f"{date[:4]}-{date[4:6]}-{date[6:8]}"
+                        if len(date) == 8
+                        else date
+                    )
+                )
+                type_label = "Event" if item_type == "event" else "Recording"
+                sync_src = entry_data_dict.get(
+                    RECORDINGS_SOURCE, RECORDINGS_SOURCE_SD
+                )
+                count_part = (
+                    f" ({type_label} {recordingCount} / {totalRecordingCount})"
+                    if recordingCount is not False and totalRecordingCount is not False
+                    else ""
+                )
+                delay_msg = f"{sync_src} - Download delayed: {date_formatted}{count_part}"
+                entryData["downloadProgress"] = delay_msg
+                entryData["downloadDelayedProgress"] = delay_msg
+                delayed_until = now_ts + GO2RTC_BUSY_DELAY_SECONDS
+                entryData["fastDownloadDelayedUntil"] = delayed_until
+                entryData["go2rtcActive"] = True
+                entryData["go2rtcConsumers"] = go2rtc_status.get("consumers", 1)
+                entryData["go2rtcStream"] = go2rtc_status.get("stream_id")
+
+                LOGGER.info(
+                    "[Fast Download - %s] Active go2rtc streaming session detected on stream '%s' (%d consumer(s)). Synchronization delayed for 5 minutes.",
+                    device_name,
+                    go2rtc_status.get("stream_id"),
+                    go2rtc_status.get("consumers", 1),
+                )
+
+                if hass:
+                    def notify_sync_sensor_delay():
+                        for e in entryData.get("entities", []):
+                            ent = e.get("entity")
+                            if (
+                                ent
+                                and getattr(ent, "_name_suffix", "")
+                                == "Recordings Synchronization"
+                            ):
+                                ent.updateTapo(entryData.get("camData"))
+                                ent.async_schedule_update_ha_state(True)
+
+                    hass.loop.call_soon_threadsafe(notify_sync_sensor_delay)
+
+                return None
+
+        # this NEEDS to happen otherwise camera does not send data!
+        allRecordings = await hass.async_add_executor_job(tapo.getRecordings, date)
 
         status_callback = processDownloadStatus(
             entryData,
@@ -1496,117 +1644,156 @@ async def getRecording(
 
         entryData["isDownloadingStream"] = True
         downloadedFile = None
+        try:
+            if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
+                entryData["sdDownloadMethod"] = "Fast (Download Protocol)"
 
-        if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
-            entryData["sdDownloadMethod"] = "Fast (Download Protocol)"
-            thumb_path = getColdFile(
-                hass,
-                entry_id,
-                startDate,
-                endDate,
-                "thumbs",
-                childID=childID,
-                subfolder=subfolder,
-            )
-            cloud_pwd = (
-                getattr(tapo, "cloudPassword", "")
-                or entry_data_dict.get(CLOUD_PASSWORD)
-                or entry_data_dict.get(CONF_PASSWORD)
-                or ""
-            )
-            ffmpeg_binary = "ffmpeg"
-            if DATA_FFMPEG in hass.data and hasattr(hass.data[DATA_FFMPEG], "binary"):
-                ffmpeg_binary = hass.data[DATA_FFMPEG].binary
-
-            try:
-                fast_downloader = FastDownloader(
-                    host=tapo.host,
-                    cloud_password=cloud_pwd,
-                    startDate=startDate,
-                    endDate=endDate,
-                    output_video_path=coldFilePath,
-                    output_thumb_path=thumb_path,
-                    port=getattr(tapo, "streamPort", 8800),
-                    ffmpeg_bin=ffmpeg_binary,
-                )
-                LOGGER.debug(
-                    "[Fast Download - %s] Starting fast download for %s (%s to %s)",
-                    device_name,
-                    coldFilePath,
+                thumb_path = getColdFile(
+                    hass,
+                    entry_id,
                     startDate,
                     endDate,
+                    "thumbs",
+                    childID=childID,
+                    subfolder=subfolder,
                 )
-                downloadedFile = await hass.async_add_executor_job(
-                    fast_downloader.sync_download, status_callback
+                cloud_pwd = (
+                    getattr(tapo, "cloudPassword", "")
+                    or entry_data_dict.get(CLOUD_PASSWORD)
+                    or entry_data_dict.get(CONF_PASSWORD)
+                    or ""
                 )
-                entryData["lastDownloadWarning"] = None
-            except Exception as err:
-                err_msg = str(err)
-                if "401" in err_msg or "authentication" in err_msg.lower():
-                    warn_desc = (
-                        "Falha de autenticação na porta de mídia 8800 (HTTP 401). "
-                        "Verifique a 'Cloud Password' nas configurações da câmera."
+                ffmpeg_binary = "ffmpeg"
+                if DATA_FFMPEG in hass.data and hasattr(hass.data[DATA_FFMPEG], "binary"):
+                    ffmpeg_binary = hass.data[DATA_FFMPEG].binary
+
+                try:
+                    fast_downloader = FastDownloader(
+                        host=tapo.host,
+                        cloud_password=cloud_pwd,
+                        startDate=startDate,
+                        endDate=endDate,
+                        output_video_path=coldFilePath,
+                        output_thumb_path=thumb_path,
+                        port=getattr(tapo, "streamPort", 8800),
+                        ffmpeg_bin=ffmpeg_binary,
                     )
-                else:
-                    warn_desc = f"Erro no download rápido na porta 8800: {err}"
-                LOGGER.warning(
-                    "[Fast Download - %s] %s Executando fallback para o método legado (Downloader).",
-                    device_name,
-                    warn_desc,
-                )
-                entryData["sdDownloadMethod"] = "Legacy (Fallback)"
-                entryData["lastDownloadWarning"] = warn_desc
-
-        if downloadedFile is None:
-            if entryData.get("sdDownloadMethod") != "Legacy (Fallback)":
-                entryData["sdDownloadMethod"] = "Legacy (Playback)"
-            target_video_dir = (
-                os.path.dirname(coldFilePath) + "/"
-                if selected_download_method == SD_DOWNLOAD_METHOD_FAST
-                else coldDirPath + "/videos/"
-            )
-            os.makedirs(target_video_dir, exist_ok=True)
-            downloader = Downloader(
-                tapo,
-                startDate,
-                endDate,
-                timeCorrection,
-                target_video_dir,
-                0,
-                None,
-                None,
-                downloadUID + ".mp4",
-            )
-            temp_ts = os.path.join(target_video_dir, downloadUID + ".mp4.ts")
-            try:
-                downloadedFile = await downloader.downloadFile(status_callback)
-            finally:
-                if (
-                    selected_download_method == SD_DOWNLOAD_METHOD_FAST
-                    and os.path.exists(temp_ts)
-                ):
-                    try:
-                        os.remove(temp_ts)
-                        LOGGER.warning(
-                            "[Download Fallback] Cleaned orphaned temporary file: %s",
-                            temp_ts,
+                    LOGGER.debug(
+                        "[Fast Download - %s] Starting fast download for %s (%s to %s)",
+                        device_name,
+                        coldFilePath,
+                        startDate,
+                        endDate,
+                    )
+                    downloadedFile = await hass.async_add_executor_job(
+                        fast_downloader.sync_download, status_callback
+                    )
+                    entryData["lastDownloadWarning"] = None
+                except Exception as err:
+                    err_msg = str(err)
+                    if "401" in err_msg or "authentication" in err_msg.lower():
+                        warn_desc = (
+                            "Authentication failure on media port 8800 (HTTP 401). "
+                            "Check 'Cloud Password' in camera settings."
                         )
-                    except Exception as clean_err:
-                        LOGGER.debug("Could not remove temp ts file: %s", clean_err)
+                    else:
+                        warn_desc = f"Error during fast download on port 8800: {err}"
+                    LOGGER.warning(
+                        "[Fast Download - %s] %s",
+                        device_name,
+                        warn_desc,
+                    )
+                    entryData["lastDownloadWarning"] = warn_desc
 
-        entryData["isDownloadingStream"] = False
-        if downloadedFile.get("currentAction") == "Recording in progress":
-            raise Unresolvable("Recording is currently in progress.")
+            if downloadedFile is None:
+                duration_seconds = endDate - startDate
+                is_continuous = (
+                    subfolder == SUBDIR_CONTINUOUS
+                    or item_type == "recording"
+                    or duration_seconds > 120
+                )
 
-        hass.bus.fire(
-            "tapo_control_media_downloaded",
-            {
-                "entry_id": entry_id,
-                "startDate": startDate,
-                "endDate": endDate,
-                "filePath": coldFilePath,
-            },
-        )
+                if selected_download_method == SD_DOWNLOAD_METHOD_FAST and is_continuous:
+                    LOGGER.info(
+                        "[Fast Download - %s] Fast download temporarily unavailable for continuous recording (%ds). "
+                        "Skipping slow 1x playback fallback; will retry fast download on next cycle.",
+                        device_name,
+                        duration_seconds,
+                    )
+                    entryData["sdDownloadMethod"] = "Fast (Retry Pending)"
+                    return None
+
+                if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
+                    LOGGER.warning(
+                        "[Fast Download - %s] Fast download failed for short clip (%ds). Falling back to legacy download method.",
+                        device_name,
+                        duration_seconds,
+                    )
+                    entryData["sdDownloadMethod"] = "Legacy (Fallback)"
+                else:
+                    if entryData.get("sdDownloadMethod") != "Legacy (Fallback)":
+                        entryData["sdDownloadMethod"] = "Legacy (Playback)"
+
+                target_video_dir = (
+                    os.path.dirname(coldFilePath) + "/"
+                    if selected_download_method == SD_DOWNLOAD_METHOD_FAST
+                    else coldDirPath + "/videos/"
+                )
+                os.makedirs(target_video_dir, exist_ok=True)
+                downloader = Downloader(
+                    tapo,
+                    startDate,
+                    endDate,
+                    timeCorrection,
+                    target_video_dir,
+                    0,
+                    None,
+                    None,
+                    downloadUID + ".mp4",
+                )
+                temp_ts = os.path.join(target_video_dir, downloadUID + ".mp4.ts")
+                try:
+                    downloadedFile = await downloader.downloadFile(status_callback)
+                except Exception as legacy_err:
+                    LOGGER.warning(
+                        "[Download Fallback - %s] Legacy downloader failed: %s",
+                        device_name,
+                        legacy_err,
+                    )
+                    entryData["lastDownloadWarning"] = str(legacy_err)
+                    downloadedFile = None
+                finally:
+                    if (
+                        selected_download_method == SD_DOWNLOAD_METHOD_FAST
+                        and os.path.exists(temp_ts)
+                    ):
+                        try:
+                            os.remove(temp_ts)
+                            LOGGER.warning(
+                                "[Download Fallback] Cleaned orphaned temporary file: %s",
+                                temp_ts,
+                            )
+                        except Exception as clean_err:
+                            LOGGER.debug("Could not remove temp ts file: %s", clean_err)
+
+            if downloadedFile and downloadedFile.get("currentAction") == "Recording in progress":
+                raise Unresolvable("Recording is currently in progress.")
+
+            if downloadedFile:
+                hass.bus.fire(
+                    "tapo_control_media_downloaded",
+                    {
+                        "entry_id": entry_id,
+                        "startDate": startDate,
+                        "endDate": endDate,
+                        "filePath": coldFilePath,
+                    },
+                )
+        finally:
+            entryData["isDownloadingStream"] = False
+
+    if not os.path.exists(coldFilePath):
+        return None
 
     await processDownload(
         hass, entry_id, entryData, startDate, endDate, subfolder=subfolder

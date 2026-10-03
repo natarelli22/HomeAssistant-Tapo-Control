@@ -9,6 +9,7 @@ from .const import (
     DOMAIN,
     LOGGER,
     ENABLE_MEDIA_SYNC,
+    ENABLE_MEDIA_CLEANUP,
     MEDIA_SYNC_HOURS,
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
@@ -50,9 +51,20 @@ async def async_setup_entry(
             LOGGER.debug("Adding tapoPrivacySwitch...")
             switches.append(tapoPrivacySwitch)
 
-        if entry_stored_data is None or ENABLE_MEDIA_SYNC not in entry_stored_data:
-            await entry_storage.async_save({ENABLE_MEDIA_SYNC: False})
-            entry_stored_data = await entry_storage.async_load()
+        if entry_stored_data is None:
+            entry_stored_data = {}
+
+        save_needed = False
+        if ENABLE_MEDIA_SYNC not in entry_stored_data:
+            entry_stored_data[ENABLE_MEDIA_SYNC] = False
+            save_needed = True
+
+        if ENABLE_MEDIA_CLEANUP not in entry_stored_data:
+            entry_stored_data[ENABLE_MEDIA_CLEANUP] = False
+            save_needed = True
+
+        if save_needed:
+            await entry_storage.async_save(entry_stored_data)
 
         if (
             "alert_event_types" in entry["camData"]
@@ -83,6 +95,17 @@ async def async_setup_entry(
             if tapoEnableMediaSyncSwitch:
                 LOGGER.debug("Adding TapoEnableMediaSyncSwitch...")
                 switches.append(tapoEnableMediaSyncSwitch)
+
+            tapoEnableMediaCleanupSwitch = TapoEnableMediaCleanupSwitch(
+                entry,
+                hass,
+                config_entry,
+                entry_storage,
+                entry_stored_data[ENABLE_MEDIA_CLEANUP],
+            )
+            if tapoEnableMediaCleanupSwitch:
+                LOGGER.debug("Adding TapoEnableMediaCleanupSwitch...")
+                switches.append(tapoEnableMediaCleanupSwitch)
 
         tapoLensDistortionCorrectionSwitchAvailable = await check_functionality(
             entry,
@@ -387,14 +410,28 @@ class TapoEnableMediaSyncSwitch(TapoSwitchEntity):
         entry[ENABLE_MEDIA_SYNC] = savedValue
 
     async def async_turn_on(self) -> None:
-        await self._entry_storage.async_save({ENABLE_MEDIA_SYNC: True})
+        stored_data = await self._entry_storage.async_load() or {}
+        stored_data[ENABLE_MEDIA_SYNC] = True
+        await self._entry_storage.async_save(stored_data)
         self._entry[ENABLE_MEDIA_SYNC] = True
         self._attr_state = "on"
+        self._trigger_sync_sensor_update()
 
     async def async_turn_off(self) -> None:
-        await self._entry_storage.async_save({ENABLE_MEDIA_SYNC: False})
+        stored_data = await self._entry_storage.async_load() or {}
+        stored_data[ENABLE_MEDIA_SYNC] = False
+        await self._entry_storage.async_save(stored_data)
         self._entry[ENABLE_MEDIA_SYNC] = False
         self._attr_state = "off"
+        self._trigger_sync_sensor_update()
+
+    def _trigger_sync_sensor_update(self) -> None:
+        for e in self._entry.get("entities", []):
+            entity = e.get("entity")
+            if entity and getattr(entity, "_name_suffix", "") == "Recordings Synchronization":
+                entity.updateTapo(self._entry.get("camData"))
+                if hasattr(entity, "async_write_ha_state"):
+                    entity.async_write_ha_state()
 
     def updateTapo(self, camData):
         mediaSyncHours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
@@ -408,6 +445,67 @@ class TapoEnableMediaSyncSwitch(TapoSwitchEntity):
         )
         self._attr_extra_state_attributes["recordings_source"] = recordings_source
         self._attr_extra_state_attributes["sync_source"] = recordings_source
+
+
+class TapoEnableMediaCleanupSwitch(TapoSwitchEntity):
+    def __init__(
+        self,
+        entry: dict,
+        hass: HomeAssistant,
+        config_entry,
+        entry_storage: Store,
+        savedValue: bool,
+    ):
+        recordings_source = config_entry.data.get(
+            RECORDINGS_SOURCE,
+            config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        self._attr_extra_state_attributes = {
+            "storage_path": getColdDirPathForEntry(hass, config_entry.entry_id),
+            "recordings_source": recordings_source,
+        }
+        TapoSwitchEntity.__init__(
+            self,
+            "Media Cleanup",
+            entry,
+            hass,
+            config_entry,
+            "mdi:broom",
+        )
+        self._entry_storage = entry_storage
+        self._attr_state = "on" if savedValue else "off"
+        entry[ENABLE_MEDIA_CLEANUP] = savedValue
+
+    async def async_turn_on(self) -> None:
+        stored_data = await self._entry_storage.async_load() or {}
+        stored_data[ENABLE_MEDIA_CLEANUP] = True
+        await self._entry_storage.async_save(stored_data)
+        self._entry[ENABLE_MEDIA_CLEANUP] = True
+        self._attr_state = "on"
+        self._trigger_sync_sensor_update()
+
+    async def async_turn_off(self) -> None:
+        stored_data = await self._entry_storage.async_load() or {}
+        stored_data[ENABLE_MEDIA_CLEANUP] = False
+        await self._entry_storage.async_save(stored_data)
+        self._entry[ENABLE_MEDIA_CLEANUP] = False
+        self._attr_state = "off"
+        self._trigger_sync_sensor_update()
+
+    def _trigger_sync_sensor_update(self) -> None:
+        for e in self._entry.get("entities", []):
+            entity = e.get("entity")
+            if entity and getattr(entity, "_name_suffix", "") == "Recordings Synchronization":
+                entity.updateTapo(self._entry.get("camData"))
+                if hasattr(entity, "async_write_ha_state"):
+                    entity.async_write_ha_state()
+
+    def updateTapo(self, camData):
+        mediaSyncHours = self._config_entry.data.get(MEDIA_SYNC_HOURS)
+        self._attr_extra_state_attributes["retention_hours"] = mediaSyncHours
+        self._attr_extra_state_attributes["storage_path"] = getColdDirPathForEntry(
+            self._hass, self._config_entry.entry_id
+        )
 
 
 class TapoChimeRingtoneSwitch(TapoSwitchEntity):

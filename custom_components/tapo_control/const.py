@@ -41,6 +41,7 @@ CONF_TRANSPORT_METHOD = "transport_method"
 
 ENABLE_MOTION_SENSOR = "enable_motion_sensor"
 ENABLE_MEDIA_SYNC = "enable_media_sync"
+ENABLE_MEDIA_CLEANUP = "enable_media_cleanup"
 
 IS_KLAP_DEVICE = "is_klap_device"
 REPORTED_IP_ADDRESS = "reported_ip_address"
@@ -84,6 +85,8 @@ SUBDIR_EVENTS = "events"
 SUBDIR_CONTINUOUS = "continuous"
 
 SD_SHOW_ONLINE_CONTENT = "sd_show_online_content"
+SD_CHECK_GO2RTC_SESSION = "sd_check_go2rtc_session"
+GO2RTC_BUSY_DELAY_SECONDS = 5 * 60
 
 TOGGLE_STATES = ["on", "off"]
 

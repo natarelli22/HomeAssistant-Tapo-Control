@@ -30,6 +30,7 @@ from .const import (
     CONTROL_PORT,
     DOMAIN_CONFIG,
     ENABLE_MEDIA_SYNC,
+    ENABLE_MEDIA_CLEANUP,
     ENABLE_SOUND_DETECTION,
     CONF_CUSTOM_STREAM_HD,
     CONF_CUSTOM_STREAM_SD,
@@ -1017,24 +1018,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                             should_run = True
 
                     if should_run:
-                        LOGGER.debug(
-                            "Initiating scheduled media cleanup for %s at %s...",
-                            parent_device["name"],
-                            fast_cleanup_time,
-                        )
-                        await mediaCleanup(hass, entry, parent_device)
+                        if parent_device.get(ENABLE_MEDIA_CLEANUP, False):
+                            LOGGER.debug(
+                                "Initiating scheduled media cleanup for %s at %s...",
+                                parent_device["name"],
+                                fast_cleanup_time,
+                            )
+                            await mediaCleanup(hass, entry, parent_device)
                         if parent_device["isParent"]:
                             for child in parent_device["childDevices"]:
-                                LOGGER.debug(
-                                    "Initiating scheduled media cleanup for %s at %s...",
-                                    child["name"],
-                                    fast_cleanup_time,
-                                )
-                                await mediaCleanup(hass, entry, child)
+                                if child.get(ENABLE_MEDIA_CLEANUP, False):
+                                    LOGGER.debug(
+                                        "Initiating scheduled media cleanup for %s at %s...",
+                                        child["name"],
+                                        fast_cleanup_time,
+                                    )
+                                    await mediaCleanup(hass, entry, child)
                 else:
                     if (
                         ts - hass.data[DOMAIN][entry.entry_id]["lastMediaCleanup"]
                         > MEDIA_CLEANUP_PERIOD
+                        and hass.data[DOMAIN][entry.entry_id].get(ENABLE_MEDIA_CLEANUP, False)
                     ):
                         LOGGER.debug(
                             "Initiating media cleanup for "
@@ -1044,7 +1048,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         await mediaCleanup(hass, entry, hass.data[DOMAIN][entry.entry_id])
                     if hass.data[DOMAIN][entry.entry_id]["isParent"]:
                         for child in hass.data[DOMAIN][entry.entry_id]["childDevices"]:
-                            if ts - child["lastMediaCleanup"] > MEDIA_CLEANUP_PERIOD:
+                            if (
+                                ts - child["lastMediaCleanup"] > MEDIA_CLEANUP_PERIOD
+                                and child.get(ENABLE_MEDIA_CLEANUP, False)
+                            ):
                                 LOGGER.debug(
                                     "Initiating media cleanup for " + child["name"] + "..."
                                 )
@@ -1144,9 +1151,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             "downloadProgress": False,
             "initialMediaScanDone": False,
             ENABLE_MEDIA_SYNC: None,
+            ENABLE_MEDIA_CLEANUP: None,
             "mediaSyncScheduled": False,
             "mediaSyncRanOnce": False,
             "mediaSyncAvailable": True,
+            "mediaCleanupAvailable": True,
             "initialMediaScanRunning": False,
             "mediaScanResult": {},  # keeps track of all videos currently on camera
             "timezoneOffset": timezoneOffset,
@@ -1220,9 +1229,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                 "downloadProgress": False,
                                 "initialMediaScanDone": False,
                                 ENABLE_MEDIA_SYNC: None,
+                                ENABLE_MEDIA_CLEANUP: None,
                                 "mediaSyncScheduled": False,
                                 "mediaSyncRanOnce": False,
                                 "mediaSyncAvailable": True,
+                                "mediaCleanupAvailable": True,
                                 "initialMediaScanRunning": False,
                                 "runningMediaSync": False,
                                 "mediaScanResult": {},  # keeps track of all videos currently on camera
@@ -1353,6 +1364,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     enableMediaSync
                     and entry.entry_id in hass.data.get(DOMAIN, {})
                     and should_run
+                    and device.get(ENABLE_MEDIA_CLEANUP, False)
                 ):
                     try:
                         await mediaCleanup(hass, entry, device)
@@ -1365,11 +1377,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             mediaSyncHours = entry.data.get(MEDIA_SYNC_HOURS)
             LOGGER.debug("mediaSync - 2")
 
-            if mediaSyncHours == "":
+            if not mediaSyncHours:
                 mediaSyncTime = False
             else:
-                mediaSyncTime = (int(mediaSyncHours) * 60 * 60) + timeCorrection
+                try:
+                    mediaSyncTime = (int(mediaSyncHours) * 60 * 60) + (
+                        timeCorrection if isinstance(timeCorrection, (int, float)) else 0
+                    )
+                except (ValueError, TypeError):
+                    mediaSyncTime = False
             LOGGER.debug("mediaSync - 3")
+            now_ts = time.time()
+            entry_download_method = entry.data.get(
+                SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+            )
+            if (
+                entry_download_method == SD_DOWNLOAD_METHOD_FAST
+                and device.get("fastDownloadDelayedUntil", 0) > now_ts
+            ):
+                remaining_m = max(1, int((device["fastDownloadDelayedUntil"] - now_ts) / 60))
+                LOGGER.debug(
+                    "[Fast Download - %s] Synchronization paused (%s, %d min remaining)",
+                    device.get("name"),
+                    device.get("downloadProgress", "Download delayed"),
+                    remaining_m,
+                )
+                return
+
+            if device.get("fastDownloadDelayedUntil", 0) > 0 and now_ts >= device["fastDownloadDelayedUntil"]:
+                device["fastDownloadDelayedUntil"] = 0
+                device["downloadDelayedProgress"] = None
+                device["go2rtcActive"] = False
+                device["go2rtcConsumers"] = 0
+                device["go2rtcStream"] = None
+
+            if device.get("isDownloadingStream", False) and not device.get("runningMediaSync", False):
+                LOGGER.warning(
+                    "[Watchdog - %s] Detected stale isDownloadingStream flag. Resetting to False to resume sync.",
+                    device.get("name"),
+                )
+                device["isDownloadingStream"] = False
+
             if (
                 enableMediaSync
                 and entry.entry_id in hass.data[DOMAIN]
@@ -1389,8 +1437,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     LOGGER.debug("getRecordingsList -2")
 
                     ts = time.time()
+                    cam_ts = int(ts) - (timeCorrection if isinstance(timeCorrection, (int, float)) else 0)
+                    min_end_cutoff = min(cam_ts - 120, int(ts) - 120)
                     for searchResult in recordingsList:
+                        if (
+                            device.get("fastDownloadDelayedUntil", 0) > time.time()
+                        ):
+                            break
                         for key in searchResult:
+                            if (
+                                device.get("fastDownloadDelayedUntil", 0) > time.time()
+                            ):
+                                break
                             LOGGER.debug("inside for - 1")
                             enableMediaSync = device[ENABLE_MEDIA_SYNC]
                             LOGGER.debug("inside for - 2")
@@ -1429,7 +1487,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                     for recording in recordingsForDay:
                                         for recordingKey in recording:
                                             rec_data = recording[recordingKey]
-                                            if rec_data["endTime"] > int(ts) - 60:
+                                            if rec_data["endTime"] > min_end_cutoff:
                                                 continue
                                             if rec_data["endTime"] > int(ts) - int(mediaSyncTime):
                                                 sf = get_recording_subfolder(rec_data)
@@ -1456,6 +1514,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                             download_queue.append((rec, k, sf, idx, tot_cont, "recording"))
 
                                     for recording, recordingKey, subf, rec_count, tot_count, item_type in download_queue:
+                                        if (
+                                            device.get("fastDownloadDelayedUntil", 0) > time.time()
+                                        ):
+                                            break
                                         try:
                                             enableMediaSync = device[
                                                 ENABLE_MEDIA_SYNC
@@ -1493,22 +1555,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                             else:
                                                 LOGGER.warning(err)
                                         except Exception as err:
-                                            device["runningMediaSync"] = False
-                                            LOGGER.error(err)
+                                            LOGGER.error("[Media Sync - %s] Error downloading recording: %s", device.get("name"), err)
                                 else:
                                     totalRecordingsToDownload = 0
                                     for recording in recordingsForDay:
                                         for recordingKey in recording:
                                             rec_end = recording[recordingKey]["endTime"]
-                                            if rec_end > int(ts) - 60:
+                                            if rec_end > min_end_cutoff:
                                                 continue
                                             if rec_end > int(ts) - (int(mediaSyncTime)):
                                                 totalRecordingsToDownload += 1
                                     recordingCount = 0
                                     for recording in recordingsForDay:
+                                        if (
+                                            device.get("fastDownloadDelayedUntil", 0) > time.time()
+                                        ):
+                                            break
                                         for recordingKey in recording:
                                             rec_end = recording[recordingKey]["endTime"]
-                                            if rec_end > int(ts) - 60:
+                                            if rec_end > min_end_cutoff:
                                                 continue
                                             if rec_end > (int(ts) - (int(mediaSyncTime))):
                                                 recordingCount += 1
@@ -1548,17 +1613,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                                     else:
                                                         LOGGER.warning(err)
                                                 except Exception as err:
-                                                    device["runningMediaSync"] = False
-                                                    LOGGER.error(err)
+                                                    LOGGER.error("[Media Sync - %s] Error downloading recording: %s", device.get("name"), err)
                             else:
                                 LOGGER.debug(
                                     f"Media sync ignoring {searchResult[key]["date"]}. Media sync: {enableMediaSync}."
                                 )
                 except Exception as err:
                     LOGGER.error(err)
-                LOGGER.debug("runningMediaSync -false")
-                device["downloadProgress"] = "Finished download"
-                device["runningMediaSync"] = False
+                finally:
+                    LOGGER.debug("runningMediaSync -false")
+                    if not (
+                        device.get("fastDownloadDelayedUntil", 0) > time.time()
+                    ):
+                        device["downloadProgress"] = "Finished download"
+                    device["runningMediaSync"] = False
+                    device["isDownloadingStream"] = False
             else:
                 LOGGER.debug(
                     f"Media sync for {device["name"]} disabled (inside mediaSync): {enableMediaSync}"
@@ -1568,10 +1637,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             if hass.data[DOMAIN][entry.entry_id]["events"]:
                 await hass.data[DOMAIN][entry.entry_id]["events"].async_stop()
 
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, unsubscribe)
-        hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STOP,
-            lambda event: hass.add_job(_close_controllers, hass, entry.entry_id),
+        entry.async_on_unload(
+            hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, unsubscribe)
+        )
+        entry.async_on_unload(
+            hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STOP,
+                lambda event: hass.add_job(_close_controllers, hass, entry.entry_id),
+            )
         )
 
     except Exception as e:

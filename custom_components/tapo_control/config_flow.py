@@ -60,6 +60,7 @@ from .const import (
     SD_SYNC_RECORDING_TYPES_BOTH,
     SD_SYNC_RECORDING_TYPES_OPTIONS,
     SD_SHOW_ONLINE_CONTENT,
+    SD_CHECK_GO2RTC_SESSION,
     REPORTED_IP_ADDRESS,
     DOORBELL_UDP_DISCOVERED,
     SOUND_DETECTION_DURATION,
@@ -1589,8 +1590,12 @@ class TapoOptionsFlowHandler(OptionsFlow):
             else:
                 submitted_cold_path = submitted_cold_path.strip()
 
-            if submitted_cold_path != "" and not os.path.exists(submitted_cold_path):
-                errors[MEDIA_SYNC_COLD_STORAGE_PATH] = "cold_storage_path_does_not_exist"
+            if submitted_cold_path != "":
+                path_exists = await self.hass.async_add_executor_job(
+                    os.path.exists, submitted_cold_path
+                )
+                if not path_exists:
+                    errors[MEDIA_SYNC_COLD_STORAGE_PATH] = "cold_storage_path_does_not_exist"
 
             if not errors:
                 try:
@@ -1687,6 +1692,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
         current_fast_cleanup_time = self.config_entry.data.get(
             FAST_CLEANUP_TIME, "04:00"
         )
+        current_check_go2rtc = self.config_entry.data.get(
+            SD_CHECK_GO2RTC_SESSION, True
+        )
 
         if user_input is not None:
             raw_cleanup_time = user_input.get(FAST_CLEANUP_TIME)
@@ -1717,6 +1725,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     user_input.get(SD_SHOW_ONLINE_CONTENT, False)
                 )
                 all_config[FAST_CLEANUP_TIME] = formatted_cleanup_time
+                all_config[SD_CHECK_GO2RTC_SESSION] = bool(
+                    user_input.get(SD_CHECK_GO2RTC_SESSION, True)
+                )
                 self.hass.config_entries.async_update_entry(
                     self.config_entry,
                     data=all_config,
@@ -1731,6 +1742,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
             )
             current_fast_cleanup_time = user_input.get(
                 FAST_CLEANUP_TIME, current_fast_cleanup_time
+            )
+            current_check_go2rtc = user_input.get(
+                SD_CHECK_GO2RTC_SESSION, current_check_go2rtc
             )
 
         return self.async_show_form(
@@ -1757,6 +1771,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         FAST_CLEANUP_TIME,
                         description={"suggested_value": current_fast_cleanup_time},
                     ): str,
+                    vol.Required(
+                        SD_CHECK_GO2RTC_SESSION,
+                        description={"suggested_value": current_check_go2rtc},
+                    ): selector({"boolean": {}}),
                 }
             ),
             errors=errors,
@@ -1829,8 +1847,12 @@ class TapoOptionsFlowHandler(OptionsFlow):
 
             if not submitted_cold_path:
                 errors[MEDIA_SYNC_COLD_STORAGE_PATH] = "cold_storage_path_required"
-            elif not os.path.exists(submitted_cold_path):
-                errors[MEDIA_SYNC_COLD_STORAGE_PATH] = "cold_storage_path_does_not_exist"
+            else:
+                path_exists = await self.hass.async_add_executor_job(
+                    os.path.exists, submitted_cold_path
+                )
+                if not path_exists:
+                    errors[MEDIA_SYNC_COLD_STORAGE_PATH] = "cold_storage_path_does_not_exist"
 
             if not errors:
                 try:

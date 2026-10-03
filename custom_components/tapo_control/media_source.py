@@ -399,7 +399,7 @@ class TapoMediaSource(MediaSource):
         resolved_thumb = thumb_path.resolve()
 
         # 1. Inspect media directories registered in Home Assistant (e.g. /media)
-        media_dirs: dict[str, str] = getattr(self.hass.config, "media_dirs", {}) or {}
+        media_dirs: dict[str, str] = dict(getattr(self.hass.config, "media_dirs", {}) or {})
         if "local" not in media_dirs and os.path.exists("/media"):
             media_dirs["local"] = "/media"
 
@@ -1250,7 +1250,7 @@ class TapoMediaSource(MediaSource):
             except OSError:
                 file_exists = False
 
-        # If the file is not found at exact path, search recursively inside cam_path
+        # If the file is not found at exact path, search inside cam_path via executor
         if not file_exists and file:
             cam_path = None
             if entry_id:
@@ -1260,10 +1260,27 @@ class TapoMediaSource(MediaSource):
                 if camera in cameras:
                     cam_path = Path(cameras[camera]["path"])
 
-            if cam_path and cam_path.exists():
-                matches = list(cam_path.glob(f"**/{file}"))
-                if matches and matches[0].exists():
-                    file_path = matches[0]
+            if cam_path:
+                def _sync_find_video(base_dir: Path, target_name: str) -> Path | None:
+                    if not base_dir.exists():
+                        return None
+                    for sub in (
+                        base_dir / "videos" / SUBDIR_EVENTS / target_name,
+                        base_dir / "videos" / SUBDIR_CONTINUOUS / target_name,
+                        base_dir / "videos" / target_name,
+                    ):
+                        if sub.is_file():
+                            return sub
+                    for match in (base_dir / "videos").glob(f"**/{target_name}"):
+                        if match.is_file():
+                            return match
+                    return None
+
+                matched_file = await self.hass.async_add_executor_job(
+                    _sync_find_video, cam_path, file
+                )
+                if matched_file:
+                    file_path = matched_file
                     file_exists = True
 
         # If still not found, check if Fast download can retrieve it on-demand from the camera SD card
@@ -1328,10 +1345,63 @@ class TapoMediaSource(MediaSource):
 
         resolved_file = file_path.resolve()
 
+        # Collect authorized storage roots for path traversal guard
+        allowed_roots: list[Path] = []
+        if entry_id:
+            try:
+                allowed_roots.append(Path(getColdDirPathForEntry(self.hass, entry_id)).resolve())
+                allowed_roots.append(Path(getHotDirPathForEntry(self.hass, entry_id)).resolve())
+            except Exception:
+                pass
+        elif camera:
+            cameras = self._get_cameras()
+            if camera in cameras:
+                cam_info = cameras[camera]
+                try:
+                    allowed_roots.append(Path(cam_info["path"]).resolve())
+                    c_entry = cam_info.get("entry_id")
+                    if c_entry:
+                        allowed_roots.append(Path(getHotDirPathForEntry(self.hass, c_entry)).resolve())
+                except Exception:
+                    pass
+
         # 1. Check if located in a registered Home Assistant media directory (e.g. /media)
-        media_dirs: dict[str, str] = getattr(self.hass.config, "media_dirs", {}) or {}
+        media_dirs: dict[str, str] = dict(getattr(self.hass.config, "media_dirs", {}) or {})
         if "local" not in media_dirs and os.path.exists("/media"):
             media_dirs["local"] = "/media"
+
+        for base_dir in media_dirs.values():
+            try:
+                allowed_roots.append(Path(base_dir).resolve())
+            except Exception:
+                pass
+
+        # 2. Check if file is located in the www directory (/config/www -> /local/)
+        www_dir = Path(getDataPath()) / "www"
+        if hasattr(self.hass.config, "path"):
+            try:
+                www_dir = Path(self.hass.config.path("www"))
+            except Exception:
+                pass
+
+        resolved_www = None
+        try:
+            resolved_www = www_dir.resolve()
+            allowed_roots.append(resolved_www)
+        except Exception:
+            pass
+
+        # Path Traversal Guard: verify resolved_file belongs to an authorized root
+        is_authorized = any(
+            resolved_file == root or root in resolved_file.parents
+            for root in allowed_roots
+        )
+        if not is_authorized:
+            LOGGER.warning(
+                "Tapo media source: blocked attempt to resolve unauthorized path '%s'",
+                resolved_file,
+            )
+            raise Unresolvable("Access denied: path outside authorized media directories")
 
         for source_dir_id, base_dir in media_dirs.items():
             try:
@@ -1363,33 +1433,31 @@ class TapoMediaSource(MediaSource):
             except (ValueError, AttributeError, OSError):
                 pass
 
-        # 2. Check if file is located in the www directory (/config/www -> /local/)
-        www_dir = Path(getDataPath()) / "www"
-        if hasattr(self.hass.config, "path"):
+        if resolved_www:
             try:
-                www_dir = Path(self.hass.config.path("www"))
-            except Exception:
+                if resolved_file == resolved_www or resolved_www in resolved_file.parents:
+                    rel_www = str(resolved_file.relative_to(resolved_www)).replace("\\", "/")
+                    return PlayMedia(f"/local/{quote(rel_www)}", "video/mp4")
+            except (ValueError, AttributeError, OSError):
                 pass
 
-        try:
-            resolved_www = www_dir.resolve()
-            if resolved_file == resolved_www or resolved_www in resolved_file.parents:
-                rel_www = str(resolved_file.relative_to(resolved_www)).replace("\\", "/")
-                return PlayMedia(f"/local/{quote(rel_www)}", "video/mp4")
-        except (ValueError, AttributeError, OSError):
-            pass
-
         # 3. If in default cold storage (.storage), copy to hot storage in www/ to serve via HTTP
-        if entry_id:
+        if entry_id and resolved_www:
             try:
                 hot_dir = Path(getHotDirPathForEntry(self.hass, entry_id))
                 hot_file = hot_dir / "videos" / resolved_file.name
-                if not hot_file.exists():
-                    (hot_dir / "videos").mkdir(parents=True, exist_ok=True)
-                    await self.hass.async_add_executor_job(shutil.copyfile, resolved_file, hot_file)
+
+                def _prepare_hot_file(src: Path, dst: Path):
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    if not dst.exists():
+                        shutil.copyfile(src, dst)
+
+                await self.hass.async_add_executor_job(
+                    _prepare_hot_file, resolved_file, hot_file
+                )
                 rel_hot = str(hot_file.resolve().relative_to(resolved_www)).replace("\\", "/")
                 return PlayMedia(f"/local/{quote(rel_hot)}", "video/mp4")
             except Exception as e:
                 LOGGER.error("Error preparing file in hot storage: %s", e)
 
-        return PlayMedia(f"/local/{quote(resolved_file.name)}", "video/mp4")
+        raise Unresolvable(f"Could not resolve playable media for: {resolved_file.name}")
