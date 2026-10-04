@@ -363,6 +363,7 @@ class TapoSyncSensor(TapoSensorEntity):
             "mdi:sync",
             None,
         )
+        self._attr_extra_state_attributes = {}
 
     async def async_update(self) -> None:
         """Update the entity."""
@@ -370,7 +371,8 @@ class TapoSyncSensor(TapoSensorEntity):
 
     def updateTapo(self, camData: dict | None) -> None:
         """Update the entity."""
-        data = self._hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id, {})
+        device = getattr(self, "_entry", None) or self._hass.data.get(DOMAIN, {}).get(self._config_entry.entry_id, {})
+        data = device
         if not data:
             return
 
@@ -564,6 +566,21 @@ class TapoSyncSensor(TapoSensorEntity):
         attributes["last_cleanup_result"] = data.get(
             "lastCleanupResult", "No cleanup performed yet"
         )
+        def _fmt(ts):
+            try:
+                return dt_util.as_local(dt_util.utc_from_timestamp(ts)).isoformat()
+            except Exception:
+                return None
+
+        if device.get("lastMediaSyncStart"):
+            attributes["last_sync_start"] = _fmt(device["lastMediaSyncStart"])
+        if device.get("lastMediaSyncActivity"):
+            attributes["last_sync_activity"] = _fmt(device["lastMediaSyncActivity"])
+        if device.get("lastMediaSyncSuccess"):
+            attributes["last_sync_success"] = _fmt(device["lastMediaSyncSuccess"])
+        if device.get("mediaSyncStallCount"):
+            attributes["stall_count"] = device["mediaSyncStallCount"]
+
         self._attr_extra_state_attributes = attributes
 
 

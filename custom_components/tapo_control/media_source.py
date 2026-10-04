@@ -7,6 +7,7 @@ Integrates seamlessly with Home Assistant Media Browser and Advanced Camera Card
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import os
 from pathlib import Path
 import re
@@ -15,6 +16,8 @@ import struct
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
 from typing import Any
 
+import asyncio
+from typing import Optional, Coroutine
 from homeassistant.components.media_player import MediaClass, MediaType
 from homeassistant.components.media_source.error import Unresolvable
 from homeassistant.components.media_source.models import (
@@ -25,16 +28,19 @@ from homeassistant.components.media_source.models import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.helpers import device_registry as dr
+from homeassistant.util import dt, slugify
+
+try:
+    from homeassistant.util import dt as dt_util
+except ImportError:
+    dt_util = dt
 
 try:
     import zoneinfo
 except ImportError:
     zoneinfo = None
-
-try:
-    from homeassistant.util import dt as dt_util
-except ImportError:
-    dt_util = None
 
 try:
     from homeassistant.components.http.auth import async_sign_path
@@ -55,6 +61,8 @@ from .const import (
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
+    MEDIA_THUMBNAIL_CACHE,
+    MEDIA_THUMBNAIL_PRELOAD,
     MEDIA_VIEW_DAYS_ORDER,
     MEDIA_VIEW_RECORDINGS_ORDER,
     SD_DOWNLOAD_METHOD,
@@ -77,6 +85,10 @@ from .utils import (
     getFileName,
     getRecording,
     get_recording_subfolder,
+    getRecordings,
+    getWebFile,
+    preloadRecordingThumbnails,
+    cleanupThumbnailCache,
 )
 
 
@@ -363,6 +375,136 @@ class TapoMediaSource(MediaSource):
         super().__init__(DOMAIN)
         self.hass = hass
         self.entry = entry
+        self._background_tasks: set[asyncio.Task] = set()
+        self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, self._async_handle_stop
+        )
+
+    async def _async_handle_stop(self, _event) -> None:
+        """Cancel background media downloads on shutdown."""
+        if not self._background_tasks:
+            return
+        tasks = list(self._background_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _create_background_task(
+        self, coro: Coroutine, entry: ConfigEntry
+    ) -> asyncio.Task:
+        """Cancel downloads when their config entry unloads or HA shuts down."""
+        task = entry.async_create_background_task(
+            self.hass, coro, "tapo_recording_download"
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    def _format_clip_label(
+        self, start_ts: int, end_ts: int, timezone_offset: float
+    ) -> str:
+        start_dt = dt.as_local(dt.utc_from_timestamp(int(start_ts) - timezone_offset))
+        end_dt = dt.as_local(dt.utc_from_timestamp(int(end_ts) - timezone_offset))
+        return (
+            f"{start_dt.strftime('%Y-%m-%d %H:%M:%S')} - {end_dt.strftime('%H:%M:%S')}"
+        )
+
+    def _build_notification_id(self, entry_id: str, child_id: str) -> str:
+        suffix = child_id if child_id else "root"
+        return f"{DOMAIN}_recording_download_{entry_id}_{suffix}"
+
+    def _schedule_notification(self, coro):
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+
+        if running_loop and running_loop == self.hass.loop:
+            self.hass.async_create_task(coro)
+        else:
+            asyncio.run_coroutine_threadsafe(coro, self.hass.loop)
+
+    async def _async_create_download_notification(
+        self, notification_id: str, title: str, message: str
+    ) -> None:
+        await self.hass.services.async_call(
+            "persistent_notification",
+            "create",
+            {
+                "title": title,
+                "message": message,
+                "notification_id": notification_id,
+            },
+            blocking=False,
+        )
+
+    async def _async_dismiss_download_notification(self, notification_id: str) -> None:
+        await self.hass.services.async_call(
+            "persistent_notification",
+            "dismiss",
+            {"notification_id": notification_id},
+            blocking=False,
+        )
+
+    def _build_progress_notifier(
+        self, notification_id: str, main_title: str, sub_title: str
+    ):
+        def notifier(
+            message: str,
+            progress: Optional[float] = None,
+            total: Optional[float] = None,
+        ):
+            friendly_message = message
+            if progress is not None and total is not None and total > 0:
+                percent = round((float(progress) / float(total)) * 100)
+                friendly_message = (
+                    f"Downloading... {percent}% ({round(progress)} / {round(total)})"
+                )
+
+            full_message = (
+                f"{sub_title}\n{friendly_message}\n\n"
+                "Download runs in the background; check this notification for progress.\n\n"
+                "When browsing during downloading, only downloaded recordings are visible."
+            )
+            self._schedule_notification(
+                self._async_create_download_notification(
+                    notification_id, main_title, full_message
+                )
+            )
+
+        return notifier
+
+    def _get_display_name(self, device: dict) -> str:
+        """Return the Home Assistant device name.
+
+        This gives the name the user set in Home Assistant, instead of the device
+        name the person originally used in the Tapo app.
+
+        If the name cannot be fetched (or the user has not set anything), fall
+        back to the Tapo device name.
+        """
+        fallback = device.get("name")
+        cam_data = device.get("camData")
+        if not isinstance(cam_data, dict):
+            return fallback
+
+        basic_info = cam_data.get("basic_info")
+        if not isinstance(basic_info, dict):
+            return fallback
+
+        mac = basic_info.get("mac")
+        if not mac:
+            return fallback
+        registry = dr.async_get(self.hass)
+        device_entry = registry.async_get_device_by_identifier(
+            (DOMAIN, slugify(f"{mac}_tapo_control")),
+            device["entry"].entry_id,
+        )
+        if device_entry is None:
+            return fallback
+        return device_entry.name_by_user or fallback
 
     def generate_view(
         self,
@@ -383,6 +525,18 @@ class TapoMediaSource(MediaSource):
             can_expand=can_expand,
             thumbnail=thumbnail,
             children_media_class=MediaClass.DIRECTORY if can_expand else None,
+            children=children,
+        )
+
+    def generateView(
+        self, identifier, title, can_play, can_expand, thumbnail=None, children=None
+    ):
+        return self.generate_view(
+            identifier=identifier,
+            title=title,
+            can_play=can_play,
+            can_expand=can_expand,
+            thumbnail=thumbnail,
             children=children,
         )
 

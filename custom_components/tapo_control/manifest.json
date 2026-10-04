@@ -10,7 +10,7 @@
   "version": "2026.10.032134",
   "iot_class": "local_polling",
   "requirements": [
-    "pytapo==3.4.19",
+    "pytapo==3.4.26",
     "python-kasa[speedups]==0.10.2",
     "pycryptodome>=3.20.0"
   ],

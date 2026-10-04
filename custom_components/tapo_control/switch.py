@@ -1,3 +1,4 @@
+import datetime
 from homeassistant.core import HomeAssistant
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers.storage import Store
@@ -22,6 +23,7 @@ from .const import (
 )
 from .tapo.entities import TapoSwitchEntity
 from .utils import (
+    async_update_sync_sensors,
     async_force_entry_refresh,
     check_and_create,
     check_functionality,
@@ -441,7 +443,15 @@ class TapoEnableMediaSyncSwitch(TapoSwitchEntity):
         await self._entry_storage.async_save(stored_data)
         self._entry[ENABLE_MEDIA_SYNC] = True
         self._attr_state = "on"
+        ts = datetime.datetime.utcnow().timestamp()
+        self._entry["lastMediaSyncActivity"] = ts
+        self._entry["lastMediaSyncStart"] = 0
+        self._entry["downloadProgress"] = "Starting"
         self._trigger_sync_sensor_update()
+        await async_update_sync_sensors(
+            self._hass, self._config_entry.entry_id, self._entry
+        )
+        await self._coordinator.async_request_refresh()
 
     async def async_turn_off(self) -> None:
         stored_data = await self._entry_storage.async_load() or {}
@@ -449,7 +459,13 @@ class TapoEnableMediaSyncSwitch(TapoSwitchEntity):
         await self._entry_storage.async_save(stored_data)
         self._entry[ENABLE_MEDIA_SYNC] = False
         self._attr_state = "off"
+        self._entry["downloadProgress"] = "Disabled"
+        self._entry["lastMediaSyncActivity"] = datetime.datetime.utcnow().timestamp()
         self._trigger_sync_sensor_update()
+        await async_update_sync_sensors(
+            self._hass, self._config_entry.entry_id, self._entry
+        )
+        await self._coordinator.async_request_refresh()
 
     def _trigger_sync_sensor_update(self) -> None:
         for e in self._entry.get("entities", []):

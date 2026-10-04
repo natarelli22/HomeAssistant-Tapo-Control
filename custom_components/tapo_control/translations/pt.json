@@ -36,6 +36,7 @@
       }
     },
     "error": {
+      "cold_storage_path_in_use": "Este caminho de armazenamento a frio já é utilizado por outra câmara. Cada câmara deve utilizar um caminho exclusivo.",
       "not_tapo_device": "O endereço IP não corresponde a um dispositivo Tapo",
       "ports_closed": "A porta 443, 554 ou 2020 está fechada",
       "invalid_auth": "Dados de autenticação inválidos",
@@ -65,13 +66,18 @@
           "password": "Palavra-passe",
           "enable_motion_sensor": "Ativar sensor de movimento",
           "enable_stream": "Utilizar streaming do Home Assistant (requer reinício)",
+          "show_on_map": "Mostrar câmara no mapa",
           "enable_sound_detection": "Ativar deteção de limite de som (requer reinício)",
           "cloud_password": "Palavra-passe de cloud (opcional)",
           "sound_detection_peak": "[Deteção de som] Pico em dB. 0 é muito alto e -100 é baixo.",
           "sound_detection_duration": "[Deteção de som] Quanto tempo o ruído necessita de estar acima do pico para ativar o estado.",
-          "sound_detection_reset": "[Deteção de som] Tempo para repor o estado depois de não haver ruído acima do pico."
+          "sound_detection_reset": "[Deteção de som] Tempo para repor o estado depois de não haver ruído acima do pico.",
+          "direct_stream_arguments": "Parâmetros FFmpeg dos fluxos diretos"
         },
-        "description": "Modificar definições da sua câmara Tapo.\n\nUtilizar streaming do Home Assistant:\n- Sim: Maior atraso de reprodução, menor utilização de CPU, permite controlo de reprodução\n- Não: Atraso de reprodução muito curto, maior utilização de CPU, sem controlo de reprodução"
+        "description": "Modificar definições da sua câmara Tapo.\n\nUtilizar streaming do Home Assistant:\n- Sim: Maior atraso de reprodução, menor utilização de CPU, permite controlo de reprodução\n- Não: Atraso de reprodução muito curto, maior utilização de CPU, sem controlo de reprodução",
+        "data_description": {
+          "direct_stream_arguments": "Opções avançadas para fluxos diretos e imagens. Um mapeamento vazio repõe os valores predefinidos. -vsync: null omite este parâmetro. Suportados: -loglevel, -probesize, -analyzeduration, -frames:v, -map-video, -vsync, -c:v, -f. Aplica-se a novos fluxos; recarregue a integração para parar os existentes."
+        }
       },
       "media": {
         "title": "Origem das Gravações",
@@ -88,11 +94,15 @@
           "media_sync_hours": "Número de horas a manter sincronizadas",
           "media_sync_cold_storage_path": "Caminho do cold storage",
           "enable_event_preroll_sync": "Ativar sincronização de pré-gravação (pre-roll) de eventos",
-          "sd_download_method": "Método de download das gravações"
+          "sd_download_method": "Método de download das gravações",
+          "media_thumbnail_cache": "Guardar miniaturas em cache",
+          "media_thumbnail_preload": "Pré-carregar miniaturas"
         },
         "data_description": {
           "enable_event_preroll_sync": "Deteta automaticamente o timestamp visual no primeiro quadro de eventos do cartão SD para eliminar a diferença de pré-gravação.",
-          "sd_download_method": "Fast descarrega gravações em alta velocidade usando a porta 8800 da câmara. Legado faz o download em velocidade normal via reprodução RTSP."
+          "sd_download_method": "Fast descarrega gravações em alta velocidade usando a porta 8800 da câmara. Legado faz o download em velocidade normal via reprodução RTSP.",
+          "media_thumbnail_cache": "Guardar miniaturas dos vídeos ainda não transferidos. Se desativado, estas miniaturas são eliminadas após cerca de 5 minutos.",
+          "media_thumbnail_preload": "Obter miniaturas no arranque apenas se a cache também estiver ativa. Sem cache, obter apenas durante a navegação. Se o pré-carregamento estiver desativado, obter apenas durante a navegação se a cache estiver ativa. Desative ambas as opções para mostrar miniaturas apenas dos vídeos transferidos."
         },
         "description": "Modificar definições de sincronização de gravações do Cartão SD.\n\nAs gravações são armazenadas na pasta de configuração do Home Assistant por padrão (.storage/tapo_control), o que é incluído nas cópias de segurança e pode crescer rapidamente. Defina um caminho de cold storage fora da sua configuração (por exemplo /media/tapo_control) para evitar cópias de segurança pesadas.\nDeixe em branco para utilizar o armazenamento padrão."
       },
@@ -129,6 +139,7 @@
       }
     },
     "error": {
+      "cold_storage_path_in_use": "Este caminho de armazenamento a frio já é utilizado por outra câmara. Cada câmara deve utilizar um caminho exclusivo.",
       "invalid_auth": "Dados de autenticação inválidos",
       "unknown": "Erro desconhecido",
       "connection_failed": "Falha na ligação",
@@ -138,7 +149,10 @@
       "cold_storage_path_required": "O caminho do cold storage é obrigatório ao usar o Tapo Care",
       "cleanup_time_required": "O horário da limpeza diária é obrigatório (HH:MM, ex: 01:00)",
       "invalid_cleanup_time": "Formato de horário inválido para limpeza. Use HH:MM (ex: 01:00).",
-      "incorrect_peak_value": "Valor de pico de deteção de som incorreto."
+      "incorrect_peak_value": "Valor de pico de deteção de som incorreto.",
+      "invalid_direct_stream_arguments": "Introduza um mapeamento de parâmetros FFmpeg suportados para texto não vazio ou números. Apenas -vsync pode ser null.",
+      "cold_storage_path_overlap": "Os caminhos antigo e novo não podem estar contidos um no outro.",
+      "cold_storage_move_pending": "Existe uma mudança de armazenamento pendente. Resolva o erro nos registos da integração e recarregue antes de alterar novamente o caminho."
     }
   },
   "entity": {

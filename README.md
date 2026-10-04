@@ -96,7 +96,7 @@ Chimes:
 - Sensor entities for Network SSID, Signal Level, RSSI
 - Button entity for Reboot and Ringing the chime
 
-Additionally, following services are available for cameras with PTZ:
+Additionally, following services are available for cameras:
 
 <details>
   <summary>tapo_control.save_preset</summary>
@@ -114,6 +114,34 @@ Deletes a preset
 - **preset** Required: PTZ preset ID or a Name. See possible presets in entity attributes
 </details>
 
+
+<details>
+  <summary>tapo_control.set_record_plan</summary>
+
+`tapo_control.set_record_plan` updates the weekly recording schedule on cameras that support it. Target one camera entity for the device (HD, SD, or Direct).
+
+- **enabled** (required): Enable or disable recording. Disabling does not clear the schedule.
+- **sunday** through **saturday** (optional): Lists of `HHMM-HHMM:mode` periods in the camera's local time. Mode `1` records continuously; mode `2` records on motion. Use `2400` for the end of the day. Split overnight periods across two days.
+- Omitted days remain unchanged. An empty list (`[]`) clears that day's schedule. Gaps between periods have no recording.
+
+For example, update Monday and clear Sunday while leaving the other days unchanged:
+
+```yaml
+action: tapo_control.set_record_plan
+target:
+  entity_id: camera.your_camera_hd
+data:
+  enabled: true
+  monday:
+    - "0000-0700:1"
+    - "0700-2400:2"
+  sunday: []
+```
+
+After the call, check the camera entity's `record_plan` attribute and the schedule in the Tapo app. The **Record to SD Card** switch reflects whether recording is enabled.
+
+</details>
+
 ## Sound Detection
 
 Integration is capable of analysing sound from camera microphone and expose noise detected via binary_sensor.
@@ -128,11 +156,34 @@ Integration is capable of synchronizing recordings for fast playback.
 
 Synchronization is turned off by default, you can browse media stored on camera and request it to be played. However, downloading is rather slow, so it is a good idea to enable media synchronization in background. That way, you will be able to play any synchronized media from camera instantly.
 
+Requested recordings download in the background, with progress shown in a notification. While a download is active, cached recordings remain playable. Reloading the integration cancels its on-demand downloads; switching media sync off lets the current recording finish before the sync stops.
+
+A ✓ at the beginning of a recording's title means its video is downloaded and ready to play (for example, `✓00:00:02–00:00:04`). Refresh or reopen the recording list after a download finishes to see the checkmark; a preloaded thumbnail alone does not mark a recording as ready.
+
+With both **Cache thumbnails** and **Preload thumbnails** enabled, the initial media scan after startup downloads available detection-event thumbnails for recordings, even when video synchronization is disabled. Battery and solar-powered cameras skip this bulk thumbnail download to let them return to sleep sooner; thumbnails are requested for the selected day when you browse recordings instead. Each recording uses the thumbnail of the first detection event that starts within it. The images are saved in the cold storage `thumbs` folder without downloading the videos. Existing thumbnails are reused, and thumbnails are copied to hot storage when you browse the recordings. Recordings without a matching event, or cameras that cannot list events or provide snapshots, still get a generated thumbnail when the video is downloaded.
+
+If the initial media scan fails (for example, because no SD card is inserted), retries use the battery polling interval on battery and solar-powered cameras (10 minutes by default), or 60 seconds on mains-powered cameras. This applies even when video synchronization is disabled. An available camera or newly inserted card can therefore be detected on a later retry without reloading the integration.
+
 You can enable this setting by navigating to `Home Assistant Settings` -> `Devices & services` and clicking the `Tapo: Cameras control` integration. There, click on the `Configure` button next to the Tapo device you wish to turn media synchronization on for, and choose `Configure media`. Here, you need to define the number of hours to synchronize. Unless it is specified, synchronization does not run. Here, you are able to also set the storage path where the synchronized recordings will be stored (defaults to /config/.storage/tapo_control).
+
+The default storage is included in Home Assistant configuration backups. To keep recordings and thumbnails out of those backups, choose a directory such as `/media/tapo_control/front_camera` and exclude media from your backups.
+
+The same **Configure media** form includes two options. **Cache thumbnails** is off and **Preload thumbnails** is on by default. This loads thumbnails only while browsing and removes them after about five minutes.
+
+| Cache thumbnails | Preload thumbnails | Behavior for videos not yet downloaded |
+| --- | --- | --- |
+| On | On | Fetch thumbnails at startup and while browsing; keep them while the recordings remain on the camera. |
+| On | Off | Fetch thumbnails only while browsing; keep them while the recordings remain on the camera. |
+| Off | On | Fetch thumbnails only while browsing; delete disk and web copies after about five minutes. |
+| Off | Off | Do not fetch or display thumbnails for undownloaded videos; remove any previously cached copies. |
+
+These options do not disable thumbnails for downloaded videos, including videos downloaded for playback. Battery and solar cameras still skip startup thumbnail preloading. Changing either option reloads the camera entry and cancels active downloads.
 
 Finally, you can turn on, or off switch entity `switch.*_media_sync`.
 
 **Notice:** Recordings are deleted after the number of hours you have chosen to synchronize passes, once both the actual recording time and the file modified time is older than the number of hours set.
+
+With thumbnail caching enabled, thumbnails are kept independently of this video retention period. They are removed once a subsequent startup scan finds that the recording is no longer on the camera. With caching disabled, thumbnails remain while their downloaded videos exist; other thumbnails follow the short retention described above.
 
 ### Media download event
 
@@ -192,6 +243,22 @@ Direct streams use proprietary TP-Link streaming protocol. Non-direct ones use s
 1. If you have a device which does not have RTSP functionality, it is the only way. This includes battery devices, solar devices, as well as devices working through a hub.
 2. If you have used up [all your RTSP streams](https://www.tp-link.com/cz/support/faq/2742/) and/or your RTSP streams are unstable in Home Assistant.
 3. Direct streams are _extremely_ fast to load and have less than a half a second delay in stream* (_*make sure to DISABLE `Use Stream from Home Assistant (restart required)` in integration options for the fastest experience_). Under the hood, the new streams are a binary stream of data "straight to your browser", with no unnecessary translations or overhead.
+
+### Configuring Direct stream parameters
+
+Open the integration options, choose **Configure device**, and edit **Direct stream FFmpeg parameters**. This advanced YAML mapping overrides parameters for direct streams and snapshots on that device, including both HD and SD. Changes apply when a new stream starts. Reload the integration after saving to stop existing streams.
+
+For example, to try the settings reported for the C560WS in [PR #1279](https://github.com/JurajNyiri/HomeAssistant-Tapo-Control/pull/1279):
+
+```yaml
+-probesize: 50000
+-analyzeduration: 1000000
+-vsync: null
+```
+
+These settings have not been verified across all cameras. To try only removing `-vsync`, enter just `-vsync: null`. Set the mapping to `{}` to restore the original behavior: probe size 32 bytes, analysis duration 0 microseconds, and `-vsync 0` for direct MJPEG and snapshots (no `-vsync` for Home Assistant stream playback).
+
+Supported keys are `-loglevel`, `-probesize`, `-analyzeduration`, `-frames:v`, `-map-video`, `-vsync`, `-c:v`, and `-f`, matching the video arguments supported by pytapo. Values must be non-empty strings or numbers; only `-vsync` accepts `null`, which omits that flag. Codec, format, frame count, and video mapping overrides also affect snapshots, so changing them can prevent playback or image capture. RTSP streams use the existing **Extra arguments for ffmpeg** option instead.
 
 ### Why not use the Direct streams?
 
