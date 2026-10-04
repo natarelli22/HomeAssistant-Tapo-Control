@@ -87,9 +87,11 @@
           "media_view_recordings_order": "Ordem das gravações no Navegador de Mídia",
           "media_sync_hours": "Número de horas a manter sincronizadas",
           "media_sync_cold_storage_path": "Caminho do cold storage",
+          "enable_event_preroll_sync": "Ativar sincronização de pré-gravação (pre-roll) de eventos",
           "sd_download_method": "Método de download das gravações"
         },
         "data_description": {
+          "enable_event_preroll_sync": "Deteta automaticamente o timestamp visual no primeiro quadro de eventos do cartão SD para eliminar a diferença de pré-gravação.",
           "sd_download_method": "Fast descarrega gravações em alta velocidade usando a porta 8800 da câmara. Legado faz o download em velocidade normal via reprodução RTSP."
         },
         "description": "Modificar definições de sincronização de gravações do Cartão SD.\n\nAs gravações são armazenadas na pasta de configuração do Home Assistant por padrão (.storage/tapo_control), o que é incluído nas cópias de segurança e pode crescer rapidamente. Defina um caminho de cold storage fora da sua configuração (por exemplo /media/tapo_control) para evitar cópias de segurança pesadas.\nDeixe em branco para utilizar o armazenamento padrão."

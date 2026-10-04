@@ -61,6 +61,8 @@ from .const import (
     SD_SYNC_RECORDING_TYPES_OPTIONS,
     SD_SHOW_ONLINE_CONTENT,
     SD_CHECK_GO2RTC_SESSION,
+    ENABLE_EVENT_PREROLL_SYNC,
+    ENABLE_EVENT_PREROLL_SYNC_DEFAULT,
     REPORTED_IP_ADDRESS,
     DOORBELL_UDP_DISCOVERED,
     SOUND_DETECTION_DURATION,
@@ -1565,6 +1567,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
             MEDIA_VIEW_RECORDINGS_ORDER, "Ascending"
         )
         media_sync_hours = self.config_entry.data.get(MEDIA_SYNC_HOURS, "")
+        enable_event_preroll_sync = self.config_entry.data.get(
+            ENABLE_EVENT_PREROLL_SYNC, ENABLE_EVENT_PREROLL_SYNC_DEFAULT
+        )
         sd_download_method = self.config_entry.data.get(
             SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
         )
@@ -1610,6 +1615,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     )
                     allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
                     allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
+                    allConfigData[ENABLE_EVENT_PREROLL_SYNC] = bool(
+                        user_input.get(ENABLE_EVENT_PREROLL_SYNC, enable_event_preroll_sync)
+                    )
                     allConfigData[SD_DOWNLOAD_METHOD] = user_input.get(
                         SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
                     )
@@ -1635,6 +1643,9 @@ class TapoOptionsFlowHandler(OptionsFlow):
                 MEDIA_VIEW_RECORDINGS_ORDER, media_view_recordings_order
             )
             media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
+            enable_event_preroll_sync = user_input.get(
+                ENABLE_EVENT_PREROLL_SYNC, enable_event_preroll_sync
+            )
             sd_download_method = user_input.get(
                 SD_DOWNLOAD_METHOD, sd_download_method
             )
@@ -1659,6 +1670,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         MEDIA_SYNC_COLD_STORAGE_PATH,
                         description={"suggested_value": suggested_cold_path},
                     ): str,
+                    vol.Optional(
+                        ENABLE_EVENT_PREROLL_SYNC,
+                        description={"suggested_value": enable_event_preroll_sync},
+                    ): selector({"boolean": {}}),
                     vol.Required(
                         SD_DOWNLOAD_METHOD,
                         description={"suggested_value": sd_download_method},

@@ -88,6 +88,11 @@ SD_SHOW_ONLINE_CONTENT = "sd_show_online_content"
 SD_CHECK_GO2RTC_SESSION = "sd_check_go2rtc_session"
 GO2RTC_BUSY_DELAY_SECONDS = 5 * 60
 
+ENABLE_EVENT_PREROLL_SYNC = "enable_event_preroll_sync"
+ENABLE_EVENT_PREROLL_SYNC_DEFAULT = False
+PREROLL_MIN_DIFF_SEC = -5
+PREROLL_MAX_DIFF_SEC = 15
+
 TOGGLE_STATES = ["on", "off"]
 
 CONF_RTSP_TRANSPORT = "rtsp_transport"

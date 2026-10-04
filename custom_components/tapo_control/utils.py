@@ -51,6 +51,9 @@ from .const import (
     DOMAIN_CONFIG,
     ENABLE_MEDIA_SYNC,
     ENABLE_MEDIA_CLEANUP,
+    ENABLE_EVENT_PREROLL_SYNC,
+    PREROLL_MIN_DIFF_SEC,
+    PREROLL_MAX_DIFF_SEC,
     ENABLE_MOTION_SENSOR,
     DOMAIN,
     ENABLE_WEBHOOKS,
@@ -81,6 +84,7 @@ from .const import (
     TPLINK_DOMAIN,
     IS_KLAP_DEVICE,
 )
+from .osd_sync import async_detect_event_preroll
 
 UUID = uuid.uuid4().hex
 ALARM_CONFIG_TYPES = ("getAlarm", "getAlarmConfig", "getAlertConfig")
@@ -346,6 +350,8 @@ async def findMedia(hass, entryData, entry):
                         + str(endTime)
                     ] = True
                     if os.path.exists(filePathVideo):
+                        synced_stem = os.path.splitext(os.path.basename(filePathVideo))[0]
+                        mediaScanResult[synced_stem] = True
                         await processDownload(
                             hass,
                             entry_id,
@@ -393,19 +399,90 @@ async def processDownload(
     if not os.path.exists(coldFilePath):
         raise Unresolvable("Failed to get file from cold storage: " + coldFilePath)
 
-    if filePath not in entryData["downloadedStreams"]:
-        entryData["downloadedStreams"][filePath] = {
-            startDate: startDate,
-            endDate: endDate,
-        }
-    mediaScanName = (
-        ((childID + "-") if childID != "" else "") + str(startDate) + "-" + str(endDate)
+    entry = hass.config_entries.async_get_entry(entry_id) if hass else None
+    entry_data = entry.data if entry else {}
+    recordings_source = entry_data.get(
+        RECORDINGS_SOURCE,
+        entry_data.get("media_sync_source", RECORDINGS_SOURCE_SD),
     )
-    if mediaScanName not in entryData["mediaScanResult"]:
-        entryData["mediaScanResult"][mediaScanName] = True
+    enable_preroll = bool(
+        entryData.get(
+            ENABLE_EVENT_PREROLL_SYNC,
+            entry_data.get(ENABLE_EVENT_PREROLL_SYNC, False),
+        )
+    )
+
+    actual_startDate = startDate
+    actual_filePath = filePath
+
+    is_event = (subfolder == SUBDIR_EVENTS) or (
+        subfolder is None and (int(endDate) - int(startDate)) < 900
+    )
+    cur_stem = os.path.splitext(os.path.basename(coldFilePath))[0]
+    expected_orig_stem = getFileName(startDate, endDate, False, childID=childID)
+
+    if cur_stem != expected_orig_stem:
+        # File was already pre-roll synced
+        prefix = f"{childID}-" if childID else ""
+        suffix = f"-{endDate}"
+        if cur_stem.startswith(prefix) and cur_stem.endswith(suffix):
+            mid = cur_stem[len(prefix) : -len(suffix)]
+            if mid.isdigit():
+                actual_startDate = int(mid)
+                actual_filePath = cur_stem
+    elif recordings_source == RECORDINGS_SOURCE_SD and enable_preroll and is_event:
+        try:
+            _ffmpeg = hass.data.get(DATA_FFMPEG)
+            ffmpeg_bin = _ffmpeg.binary if _ffmpeg else "ffmpeg"
+            true_start_ts, diff_sec = await async_detect_event_preroll(
+                hass, coldFilePath, startDate, ffmpeg_bin=ffmpeg_bin
+            )
+            if true_start_ts is not None and true_start_ts != startDate:
+                new_filePath = getFileName(true_start_ts, endDate, False, childID=childID)
+                dirname = os.path.dirname(coldFilePath)
+                new_coldFilePath = os.path.join(dirname, f"{new_filePath}.mp4")
+                os.rename(coldFilePath, new_coldFilePath)
+                coldFilePath = new_coldFilePath
+                actual_startDate = true_start_ts
+                actual_filePath = new_filePath
+                LOGGER.debug(
+                    "[Pre-roll Sync - %s] Event %s-%s synchronized to visual start %s (pre-roll: %ds)",
+                    entryData.get("name", entry_id),
+                    startDate,
+                    endDate,
+                    true_start_ts,
+                    diff_sec,
+                )
+            elif true_start_ts is None:
+                LOGGER.debug(
+                    "[Pre-roll Sync - %s] Event %s-%s could not detect OSD timestamp or outside sanity limits; retaining original",
+                    entryData.get("name", entry_id),
+                    startDate,
+                    endDate,
+                )
+        except Exception as err:
+            LOGGER.warning(
+                "[Pre-roll Sync - %s] Error detecting pre-roll for %s-%s: %s",
+                entryData.get("name", entry_id),
+                startDate,
+                endDate,
+                err,
+            )
+
+    for (s_date, f_path) in ((startDate, filePath), (actual_startDate, actual_filePath)):
+        if f_path not in entryData["downloadedStreams"]:
+            entryData["downloadedStreams"][f_path] = {
+                s_date: s_date,
+                endDate: endDate,
+            }
+        scan_name = (
+            ((childID + "-") if childID != "" else "") + str(s_date) + "-" + str(endDate)
+        )
+        if scan_name not in entryData["mediaScanResult"]:
+            entryData["mediaScanResult"][scan_name] = True
 
     await generateThumb(
-        hass, entry_id, startDate, endDate, childID=childID, subfolder=subfolder
+        hass, entry_id, actual_startDate, endDate, childID=childID, subfolder=subfolder
     )
 
 
@@ -483,19 +560,41 @@ async def findFilesNoLongerPresentInCamera(
                             continue
                         filePath = os.path.join(root, f)
                         fileName = f[:-len(extension)]
-                        if (
+                        is_match = (
                             (entryData.get("isChild") is False and fileName.count("-") == 1)
                             or (
                                 (entryData.get("isChild") is True and fileName.count("-") == 2)
                                 and childID in fileName
                             )
-                        ) and fileName not in entryData.get("mediaScanResult", []):
-                            LOGGER.debug(
-                                "[SD Cleanup - %s] Found recording no longer present in camera: %s",
-                                device_name,
-                                filePath,
-                            )
-                            found.append((fileName, filePath))
+                        )
+                        if is_match:
+                            scan_res = entryData.get("mediaScanResult", {})
+                            if fileName not in scan_res:
+                                # Check if candidate is a preroll-synced file whose camera recording is in scan_res
+                                is_synced_present = False
+                                try:
+                                    parts = fileName.split("-")
+                                    if len(parts) >= 2 and parts[-2].isdigit() and parts[-1].isdigit():
+                                        fn_start = int(parts[-2])
+                                        fn_end = int(parts[-1])
+                                        prefix = "-".join(parts[:-2])
+                                        pref_dash = (prefix + "-") if prefix else ""
+                                        for c_diff in range(PREROLL_MIN_DIFF_SEC, PREROLL_MAX_DIFF_SEC + 1):
+                                            cam_start = fn_start + c_diff
+                                            cand_key = f"{pref_dash}{cam_start}-{fn_end}"
+                                            if cand_key in scan_res:
+                                                is_synced_present = True
+                                                break
+                                except Exception:
+                                    pass
+
+                                if not is_synced_present:
+                                    LOGGER.debug(
+                                        "[SD Cleanup - %s] Found recording no longer present in camera: %s",
+                                        device_name,
+                                        filePath,
+                                    )
+                                    found.append((fileName, filePath))
                     if root != scan_path and root != coldDirPath:
                         subdirs.append(root)
                 return found, subdirs
@@ -1321,6 +1420,22 @@ def getColdFile(
     else:
         raise Unresolvable("Incorrect folder specified: " + folder)
 
+    is_event = (int(endDate) - int(startDate)) < 900
+
+    def _find_preroll_match(search_dir):
+        if not is_event or not os.path.exists(search_dir):
+            return None
+        prefix = f"{childID}-" if childID else ""
+        # Check candidate start timestamps within [-5s, +15s] without blocking os.listdir
+        # Priority diffs: most common pre-roll offsets first
+        priority_diffs = (6, 5, 4, 3, 2, 1, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, -1, -2, -3, -4, -5)
+        for diff in priority_diffs:
+            cand_start = int(startDate) - diff
+            cand_path = os.path.join(search_dir, f"{prefix}{cand_start}-{endDate}{extension}")
+            if os.path.exists(cand_path):
+                return cand_path
+        return None
+
     entry = hass.config_entries.async_get_entry(entry_id) if hass else None
     entry_data = entry.data if entry else {}
     download_method = entry_data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
@@ -1329,23 +1444,36 @@ def getColdFile(
     if download_method == SD_DOWNLOAD_METHOD_FAST:
         if subfolder:
             sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
+            if os.path.exists(sub_path):
+                return sub_path
+            preroll_sub = _find_preroll_match(os.path.join(coldDirPath, folder, subfolder))
+            if preroll_sub:
+                return preroll_sub
             # Retrocompatibility: if file exists in root, return it
-            if not os.path.exists(sub_path):
-                root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-                if os.path.exists(root_path):
-                    return root_path
+            root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+            if os.path.exists(root_path):
+                return root_path
+            preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
+            if preroll_root:
+                return preroll_root
             return sub_path
 
         # If subfolder is not specified in Fast mode, first check existing files in subfolders
         events_path = os.path.join(coldDirPath, folder, SUBDIR_EVENTS, f"{fileName}{extension}")
         if os.path.exists(events_path):
             return events_path
+        preroll_events = _find_preroll_match(os.path.join(coldDirPath, folder, SUBDIR_EVENTS))
+        if preroll_events:
+            return preroll_events
         cont_path = os.path.join(coldDirPath, folder, SUBDIR_CONTINUOUS, f"{fileName}{extension}")
         if os.path.exists(cont_path):
             return cont_path
         root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
         if os.path.exists(root_path):
             return root_path
+        preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
+        if preroll_root:
+            return preroll_root
 
         # If file does not exist yet, infer subfolder based on duration (>= 15 min is continuous)
         try:
@@ -1357,10 +1485,18 @@ def getColdFile(
 
     # In Legacy mode (or without subfolder), use traditional root path
     root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-    if not os.path.exists(root_path) and subfolder:
+    if os.path.exists(root_path):
+        return root_path
+    preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
+    if preroll_root:
+        return preroll_root
+    if subfolder:
         sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
         if os.path.exists(sub_path):
             return sub_path
+        preroll_sub = _find_preroll_match(os.path.join(coldDirPath, folder, subfolder))
+        if preroll_sub:
+            return preroll_sub
     return root_path
 
 

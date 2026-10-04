@@ -124,9 +124,11 @@
           "media_view_recordings_order": "Order of recordings in Media Browser",
           "media_sync_hours": "Number of hours to keep synchronized",
           "media_sync_cold_storage_path": "Cold storage path",
+          "enable_event_preroll_sync": "Enable Event Pre-roll Synchronization",
           "sd_download_method": "Recordings download method"
         },
         "data_description": {
+          "enable_event_preroll_sync": "Automatically detect the exact visual timestamp on frame 0 of SD Card event recordings to eliminate pre-roll offset.",
           "sd_download_method": "Fast downloads recordings quickly via camera port 8800. Legacy downloads via RTSP playback."
         },
         "description": "Modify settings of recordings media synchronization from camera SD Card.\n\nRecordings are stored in the Home Assistant config folder by default (.storage/tapo_control) which is included in backups and can grow quickly. Set a Cold storage path outside of your config (for example /media/tapo_control) to avoid bloating backups.\nLeave empty to use default Home Assistant storage."

@@ -3,6 +3,7 @@ from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers.storage import Store
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -10,6 +11,10 @@ from .const import (
     LOGGER,
     ENABLE_MEDIA_SYNC,
     ENABLE_MEDIA_CLEANUP,
+    ENABLE_EVENT_PREROLL_SYNC,
+    ENABLE_EVENT_PREROLL_SYNC_DEFAULT,
+    PREROLL_MIN_DIFF_SEC,
+    PREROLL_MAX_DIFF_SEC,
     MEDIA_SYNC_HOURS,
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
@@ -63,6 +68,17 @@ async def async_setup_entry(
             entry_stored_data[ENABLE_MEDIA_CLEANUP] = False
             save_needed = True
 
+        recordings_source = config_entry.data.get(
+            RECORDINGS_SOURCE,
+            config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        if recordings_source != RECORDINGS_SOURCE_TAPO_CARE:
+            if ENABLE_EVENT_PREROLL_SYNC not in entry_stored_data:
+                entry_stored_data[ENABLE_EVENT_PREROLL_SYNC] = config_entry.data.get(
+                    ENABLE_EVENT_PREROLL_SYNC, ENABLE_EVENT_PREROLL_SYNC_DEFAULT
+                )
+                save_needed = True
+
         if save_needed:
             await entry_storage.async_save(entry_stored_data)
 
@@ -77,10 +93,6 @@ async def async_setup_entry(
                     )
                 )
 
-        recordings_source = config_entry.data.get(
-            RECORDINGS_SOURCE,
-            config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
-        )
         if (
             entry["controller"].isKLAP is False
             or recordings_source == RECORDINGS_SOURCE_TAPO_CARE
@@ -106,6 +118,20 @@ async def async_setup_entry(
             if tapoEnableMediaCleanupSwitch:
                 LOGGER.debug("Adding TapoEnableMediaCleanupSwitch...")
                 switches.append(tapoEnableMediaCleanupSwitch)
+
+        if recordings_source != RECORDINGS_SOURCE_TAPO_CARE:
+            tapoEventPrerollSyncSwitch = TapoEventPrerollSyncSwitch(
+                entry,
+                hass,
+                config_entry,
+                entry_storage,
+                entry_stored_data.get(
+                    ENABLE_EVENT_PREROLL_SYNC, ENABLE_EVENT_PREROLL_SYNC_DEFAULT
+                ),
+            )
+            if tapoEventPrerollSyncSwitch:
+                LOGGER.debug("Adding TapoEventPrerollSyncSwitch...")
+                switches.append(tapoEventPrerollSyncSwitch)
 
         tapoLensDistortionCorrectionSwitchAvailable = await check_functionality(
             entry,
@@ -506,6 +532,72 @@ class TapoEnableMediaCleanupSwitch(TapoSwitchEntity):
         self._attr_extra_state_attributes["storage_path"] = getColdDirPathForEntry(
             self._hass, self._config_entry.entry_id
         )
+
+
+class TapoEventPrerollSyncSwitch(TapoSwitchEntity):
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        entry: dict,
+        hass: HomeAssistant,
+        config_entry,
+        entry_storage: Store,
+        savedValue: bool,
+    ):
+        recordings_source = config_entry.data.get(
+            RECORDINGS_SOURCE,
+            config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        self._attr_extra_state_attributes = {
+            "recordings_source": recordings_source,
+            "sanity_check_min_diff_sec": PREROLL_MIN_DIFF_SEC,
+            "sanity_check_max_diff_sec": PREROLL_MAX_DIFF_SEC,
+        }
+        TapoSwitchEntity.__init__(
+            self,
+            "Event Pre-roll Synchronization",
+            entry,
+            hass,
+            config_entry,
+            "mdi:camera-timer",
+        )
+        self._entry_storage = entry_storage
+        self._attr_state = "on" if savedValue else "off"
+        entry[ENABLE_EVENT_PREROLL_SYNC] = savedValue
+
+    async def async_turn_on(self) -> None:
+        stored_data = await self._entry_storage.async_load() or {}
+        stored_data[ENABLE_EVENT_PREROLL_SYNC] = True
+        await self._entry_storage.async_save(stored_data)
+        self._entry[ENABLE_EVENT_PREROLL_SYNC] = True
+        self._attr_state = "on"
+        self._trigger_sync_sensor_update()
+
+    async def async_turn_off(self) -> None:
+        stored_data = await self._entry_storage.async_load() or {}
+        stored_data[ENABLE_EVENT_PREROLL_SYNC] = False
+        await self._entry_storage.async_save(stored_data)
+        self._entry[ENABLE_EVENT_PREROLL_SYNC] = False
+        self._attr_state = "off"
+        self._trigger_sync_sensor_update()
+
+    def _trigger_sync_sensor_update(self) -> None:
+        for e in self._entry.get("entities", []):
+            entity = e.get("entity")
+            if entity and getattr(entity, "_name_suffix", "") == "Recordings Synchronization":
+                entity.updateTapo(self._entry.get("camData"))
+                if hasattr(entity, "async_write_ha_state"):
+                    entity.async_write_ha_state()
+
+    def updateTapo(self, camData):
+        recordings_source = self._config_entry.data.get(
+            RECORDINGS_SOURCE,
+            self._config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        self._attr_extra_state_attributes["recordings_source"] = recordings_source
+        self._attr_extra_state_attributes["sanity_check_min_diff_sec"] = PREROLL_MIN_DIFF_SEC
+        self._attr_extra_state_attributes["sanity_check_max_diff_sec"] = PREROLL_MAX_DIFF_SEC
 
 
 class TapoChimeRingtoneSwitch(TapoSwitchEntity):

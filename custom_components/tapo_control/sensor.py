@@ -33,6 +33,8 @@ from .const import (
     SD_DOWNLOAD_METHOD,
     SD_DOWNLOAD_METHOD_LEGACY,
     SD_DOWNLOAD_METHOD_FAST,
+    ENABLE_EVENT_PREROLL_SYNC,
+    ENABLE_EVENT_PREROLL_SYNC_DEFAULT,
     SD_CHECK_GO2RTC_SESSION,
 )
 from .tapo.entities import TapoSensorEntity
@@ -485,9 +487,16 @@ class TapoSyncSensor(TapoSensorEntity):
                 self._attr_native_value = "Idle"
                 self._attr_icon = "mdi:sd"
 
+            preroll_active = data.get(
+                ENABLE_EVENT_PREROLL_SYNC,
+                self._config_entry.data.get(
+                    ENABLE_EVENT_PREROLL_SYNC, ENABLE_EVENT_PREROLL_SYNC_DEFAULT
+                ),
+            )
             attributes = {
                 "storage_mode": RECORDINGS_SOURCE_SD,
                 "sync_enabled": bool(enable_media_sync),
+                "event_preroll_sync_enabled": bool(preroll_active),
                 "media_sync_available": data.get("mediaSyncAvailable", True),
                 "cleanup_enabled": bool(enable_media_cleanup),
                 "media_cleanup_available": bool(data.get("mediaCleanupAvailable", True)),
