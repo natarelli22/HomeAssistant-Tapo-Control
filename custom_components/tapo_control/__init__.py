@@ -782,7 +782,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     and ts - last_activity > MEDIA_SYNC_WATCHDOG_SECONDS
                 ):
                     task = device.get("mediaSyncTask")
-                    if task is None or task.done() or task.cancelling():
+                    if task is None or task.done():
+                        device["runningMediaSync"] = False
+                        device["isDownloadingStream"] = False
+                        device["downloadProgress"] = "Finished download"
+                        device["lastMediaSyncActivity"] = ts
+                        hass.async_create_task(
+                            async_update_sync_sensors(hass, entry.entry_id, device)
+                        )
+                        return
+                    if task.cancelling():
                         return
                     # Leave the running flag set until the task's finally block
                     # finishes. Clearing it here would permit overlapping syncs.

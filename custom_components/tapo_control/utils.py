@@ -1794,7 +1794,7 @@ def processDownloadStatus(
         if progress_callback is not None:
             progress_callback(message, current, total)
         if hass:
-            hass.async_create_task(async_update_sync_sensors(hass, entry_id, entryData))
+            hass.add_job(async_update_sync_sensors, hass, entry_id, entryData)
 
     return processUpdate
 
@@ -3962,11 +3962,8 @@ async def scheduleAll(hass, device, entry, mediaSync):
             )
         return
 
-    if device.get("mediaSyncAvailable"):
-        if (
-            device["initialMediaScanDone"] is True
-            and device["mediaSyncScheduled"] is False
-        ):
+    if device.get("initialMediaScanDone") is True:
+        if device.get("mediaSyncScheduled") is False:
             device["mediaSyncScheduled"] = True
             LOGGER.debug("Scheduling media sync")
             callback = partial(mediaSync, entry=entry, device=device)
