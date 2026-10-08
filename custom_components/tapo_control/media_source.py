@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import struct
+import time
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
 from typing import Any
 
@@ -376,6 +377,8 @@ class TapoMediaSource(MediaSource):
         self.hass = hass
         self.entry = entry
         self._background_tasks: set[asyncio.Task] = set()
+        self._thumbs_dir_cache: dict[str, tuple[float, set[str]]] = {}
+        self._signed_url_cache: dict[str, tuple[float, str]] = {}
         self.hass.bus.async_listen_once(
             EVENT_HOMEASSISTANT_STOP, self._async_handle_stop
         )
@@ -540,15 +543,44 @@ class TapoMediaSource(MediaSource):
             children=children,
         )
 
+    def _get_dir_file_set(self, directory: Path) -> set[str]:
+        """Return cached set of non-empty filenames in directory."""
+        dir_key = str(directory)
+        now = time.time()
+        cached = self._thumbs_dir_cache.get(dir_key)
+        if cached is not None:
+            ts, files = cached
+            if now - ts < 60:
+                return files
+
+        files: set[str] = set()
+        try:
+            if directory.is_dir():
+                with os.scandir(directory) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_file() and entry.stat().st_size > 0:
+                                files.add(entry.name)
+                        except OSError:
+                            pass
+        except OSError:
+            pass
+
+        self._thumbs_dir_cache[dir_key] = (now, files)
+        return files
+
     def _get_thumbnail_url(self, thumb_path: Path | None) -> str | None:
         """Generate a loadable URL for a thumbnail image dynamically."""
         if not thumb_path:
             return None
-        try:
-            if not thumb_path.exists() or thumb_path.stat().st_size == 0:
-                return None
-        except OSError:
-            return None
+
+        path_str = str(thumb_path)
+        now = time.time()
+        cached = self._signed_url_cache.get(path_str)
+        if cached is not None:
+            ts, url = cached
+            if now - ts < 3600:
+                return url
 
         resolved_thumb = thumb_path.resolve()
 
@@ -565,14 +597,21 @@ class TapoMediaSource(MediaSource):
                     url = f"/media/{source_dir_id}/{quote(rel_media)}"
                     if async_sign_path:
                         try:
-                            return async_sign_path(
+                            signed_url = async_sign_path(
                                 self.hass, url, expiration=timedelta(days=2)
                             )
+                            if signed_url:
+                                self._signed_url_cache[path_str] = (now, signed_url)
+                            return signed_url
                         except Exception:
                             try:
-                                return async_sign_path(self.hass, url, 172800)
+                                signed_url = async_sign_path(self.hass, url, 172800)
+                                if signed_url:
+                                    self._signed_url_cache[path_str] = (now, signed_url)
+                                return signed_url
                             except Exception:
                                 pass
+                    self._signed_url_cache[path_str] = (now, url)
                     return url
             except (ValueError, AttributeError, OSError):
                 pass
@@ -589,40 +628,58 @@ class TapoMediaSource(MediaSource):
             resolved_www = www_dir.resolve()
             if resolved_thumb == resolved_www or resolved_www in resolved_thumb.parents:
                 rel_www = str(resolved_thumb.relative_to(resolved_www)).replace("\\", "/")
-                return f"/local/{quote(rel_www)}"
+                local_url = f"/local/{quote(rel_www)}"
+                self._signed_url_cache[path_str] = (now, local_url)
+                return local_url
         except (ValueError, AttributeError, OSError):
             pass
 
         return None
 
     def _find_thumbnail(self, camera_path: Path, date: str, video_file: Path) -> Path | None:
-        """Find thumbnail file in thumbs/ or video folder dynamically."""
+        """Find thumbnail file in thumbs/ or video folder dynamically with in-memory caching."""
         stem = video_file.stem
         thumbs_dir = camera_path / "thumbs"
 
-        candidates = [
-            thumbs_dir / date / f"{stem}.jpg",
-            thumbs_dir / f"{stem}.jpg",
-            thumbs_dir / SUBDIR_EVENTS / f"{stem}.jpg",
-            thumbs_dir / SUBDIR_CONTINUOUS / f"{stem}.jpg",
-            video_file.parent / f"{stem}.jpg",
-            thumbs_dir / date.replace("_", "-") / f"{stem}.jpg",
-            thumbs_dir / date.replace("-", "_") / f"{stem}.jpg",
-            thumbs_dir / date / f"{stem}.png",
-            thumbs_dir / f"{stem}.png",
-            video_file.with_suffix(".jpg"),
-            video_file.with_suffix(".png"),
+        # Ordered candidate checks: (directory, filename)
+        search_candidates = [
+            (thumbs_dir / date, f"{stem}.jpg"),
+            (thumbs_dir, f"{stem}.jpg"),
+            (thumbs_dir / SUBDIR_EVENTS, f"{stem}.jpg"),
+            (thumbs_dir / SUBDIR_CONTINUOUS, f"{stem}.jpg"),
+            (video_file.parent, f"{stem}.jpg"),
+            (thumbs_dir / date.replace("_", "-"), f"{stem}.jpg"),
+            (thumbs_dir / date.replace("-", "_"), f"{stem}.jpg"),
+            (thumbs_dir / date, f"{stem}.png"),
+            (thumbs_dir, f"{stem}.png"),
+            (video_file.parent, f"{stem}.png"),
         ]
-        for c in candidates:
-            try:
-                if c.exists() and c.stat().st_size > 0:
-                    return c
-            except OSError:
-                continue
+
+        # Timestamp range pre-roll offset candidates for detection events (<prefix><start>-<end>)
+        if "-" in stem:
+            parts = stem.split("-")
+            if len(parts) >= 2 and parts[-2].isdigit() and parts[-1].isdigit():
+                prefix = "-".join(parts[:-2]) + ("-" if len(parts) > 2 else "")
+                st_val = int(parts[-2])
+                et_val = parts[-1]
+                for diff in (1, 2, -1, -2, 3, 4, 5, 6, -3, -4, -5):
+                    cand_stem = f"{prefix}{st_val + diff}-{et_val}"
+                    search_candidates.extend([
+                        (thumbs_dir / SUBDIR_EVENTS, f"{cand_stem}.jpg"),
+                        (thumbs_dir / date, f"{cand_stem}.jpg"),
+                        (thumbs_dir, f"{cand_stem}.jpg"),
+                        (thumbs_dir / SUBDIR_CONTINUOUS, f"{cand_stem}.jpg"),
+                        (video_file.parent, f"{cand_stem}.jpg"),
+                    ])
+
+        for sdir, fname in search_candidates:
+            files = self._get_dir_file_set(sdir)
+            if fname in files:
+                return sdir / fname
 
         # Prefix matching fallback em thumbs
         stem_prefix = stem.rsplit("_", 1)[0]
-        search_dirs = [
+        prefix_dirs = [
             thumbs_dir / date,
             thumbs_dir / SUBDIR_EVENTS,
             thumbs_dir / SUBDIR_CONTINUOUS,
@@ -631,14 +688,11 @@ class TapoMediaSource(MediaSource):
             thumbs_dir,
             video_file.parent,
         ]
-        for sdir in search_dirs:
-            try:
-                if sdir.is_dir():
-                    matches = sorted(sdir.glob(f"{stem_prefix}_*.jpg"))
-                    if matches and matches[0].stat().st_size > 0:
-                        return matches[0]
-            except OSError:
-                continue
+        for sdir in prefix_dirs:
+            files = self._get_dir_file_set(sdir)
+            matches = sorted([f for f in files if f.startswith(f"{stem_prefix}_") and f.endswith(".jpg")])
+            if matches:
+                return sdir / matches[0]
 
         return None
 

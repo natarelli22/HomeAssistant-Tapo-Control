@@ -3,6 +3,7 @@ import datetime
 import filecmp
 import hashlib
 import pathlib
+import glob
 import onvif
 import os
 import re
@@ -703,6 +704,11 @@ async def findMedia(hass, entryData, entry, recordingsList=None):
         entryData["mediaScanResult"] = mediaScanResult
         entryData["initialMediaScanDone"] = True
 
+        try:
+            await hass.async_add_executor_job(sync_preroll_thumbnails, hass, entry_id)
+        except Exception as sync_err:
+            LOGGER.debug("Error running preroll thumbnail sync for %s: %s", entryData["name"], sync_err)
+
         fast_cleanup_time = entry.data.get(FAST_CLEANUP_TIME, "04:00")
         entry_download_method = entry.data.get(
             SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
@@ -729,6 +735,85 @@ def saveThumbnail(filePath, image):
         temporaryPath.replace(path)
     finally:
         temporaryPath.unlink(missing_ok=True)
+
+    # Check if a pre-roll synchronized video exists for this event and link it
+    try:
+        stem = path.stem
+        if "-" in stem:
+            parts = stem.split("-")
+            child_prefix = ""
+            if len(parts) >= 2 and not parts[0].isdigit():
+                child_prefix = parts[0] + "-"
+                st_str = parts[1]
+                et_str = parts[2] if len(parts) > 2 else ""
+            else:
+                st_str = parts[0]
+                et_str = parts[1] if len(parts) > 1 else ""
+
+            if st_str.isdigit() and et_str.isdigit():
+                st = int(st_str)
+                v_dir = str(path.parent).replace("/thumbs", "/videos")
+                if os.path.exists(v_dir):
+                    priority_diffs = (2, 1, 3, 4, 5, 6, -1, -2, -3, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+                    for diff in priority_diffs:
+                        cand_v = os.path.join(v_dir, f"{child_prefix}{st - diff}-{et_str}.mp4")
+                        if os.path.exists(cand_v):
+                            cand_t = path.parent / f"{child_prefix}{st - diff}-{et_str}.jpg"
+                            try:
+                                os.replace(path, cand_t)
+                            except OSError:
+                                shutil.move(path, cand_t)
+                            break
+    except Exception:
+        pass
+
+
+def sync_preroll_thumbnails(hass: HomeAssistant, entry_id: str):
+    """Reconcile and rename thumbnails for pre-roll synchronized video files."""
+    try:
+        coldDirPath = getColdDirPathForEntry(hass, entry_id)
+        if not os.path.exists(coldDirPath):
+            return
+        videos_pattern = os.path.join(coldDirPath, "videos", "**", "*.mp4")
+        for v in glob.glob(videos_pattern, recursive=True):
+            stem = os.path.basename(v)[:-4]
+            v_dir = os.path.dirname(v)
+            t_dir = v_dir.replace("/videos", "/thumbs")
+            exact_thumb = os.path.join(t_dir, f"{stem}.jpg")
+            if "-" in stem:
+                try:
+                    parts = stem.split("-")
+                    child_prefix = ""
+                    if len(parts) >= 2 and not parts[0].isdigit():
+                        child_prefix = parts[0] + "-"
+                        st_str = parts[1]
+                        et_str = parts[2] if len(parts) > 2 else ""
+                    else:
+                        st_str = parts[0]
+                        et_str = parts[1] if len(parts) > 1 else ""
+
+                    if st_str.isdigit() and et_str.isdigit():
+                        st = int(st_str)
+                        priority_diffs = (2, 1, 3, 4, 5, 6, -1, -2, -3, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+                        for diff in priority_diffs:
+                            cand_t = os.path.join(t_dir, f"{child_prefix}{st + diff}-{et_str}.jpg")
+                            if os.path.exists(cand_t):
+                                if not os.path.exists(exact_thumb):
+                                    try:
+                                        os.replace(cand_t, exact_thumb)
+                                    except OSError:
+                                        shutil.move(cand_t, exact_thumb)
+                                elif cand_t != exact_thumb:
+                                    try:
+                                        if os.stat(cand_t).st_ino == os.stat(exact_thumb).st_ino:
+                                            os.unlink(cand_t)
+                                    except OSError:
+                                        pass
+                                break
+                except Exception:
+                    pass
+    except Exception as err:
+        LOGGER.debug("Error in sync_preroll_thumbnails: %s", err)
 
 
 async def processDownload(
@@ -811,6 +896,36 @@ async def processDownload(
                     true_start_ts,
                     diff_sec,
                 )
+                try:
+                    old_thumb_path = getColdFile(
+                        hass,
+                        entry_id,
+                        startDate,
+                        endDate,
+                        "thumbs",
+                        childID=childID,
+                        subfolder=subfolder,
+                    )
+                    if os.path.exists(old_thumb_path):
+                        new_thumb_dir = os.path.dirname(old_thumb_path)
+                        new_thumb_path = os.path.join(new_thumb_dir, f"{new_filePath}.jpg")
+                        try:
+                            os.replace(old_thumb_path, new_thumb_path)
+                        except OSError:
+                            shutil.move(old_thumb_path, new_thumb_path)
+                        LOGGER.debug(
+                            "[Pre-roll Sync - %s] Renamed thumbnail %s -> %s",
+                            entryData.get("name", entry_id),
+                            old_thumb_path,
+                            new_thumb_path,
+                        )
+                except Exception as err:
+                    LOGGER.debug(
+                        "[Pre-roll Sync - %s] Could not link thumbnail for %s: %s",
+                        entryData.get("name", entry_id),
+                        new_filePath,
+                        err,
+                    )
             elif true_start_ts is None:
                 LOGGER.debug(
                     "[Pre-roll Sync - %s] Event %s-%s could not detect OSD timestamp or outside sanity limits; retaining original",
