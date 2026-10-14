@@ -7,8 +7,6 @@ on:
       - main
       - dev
   pull_request:
-  schedule:
-    - cron: '17 6 * * *'
   workflow_dispatch:
 
 jobs:

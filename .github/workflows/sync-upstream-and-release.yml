@@ -8,9 +8,6 @@ on:
       - 'docs/**'
       - '*.md'
       - '.gitignore'
-  schedule:
-    # Executa toda segunda-feira às 04:00 UTC (01:00 horário de Brasília)
-    - cron: '0 4 * * 1'
   workflow_dispatch:
     inputs:
       force_release:
