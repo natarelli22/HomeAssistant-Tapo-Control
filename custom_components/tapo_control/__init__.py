@@ -1246,6 +1246,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         hass.data[DOMAIN][entry.entry_id]["childDevices"].append(
                             {
                                 "controller": tapoChildController,
+                                "reauth_retries": 0,
                                 "coordinator": tapoCoordinator,
                                 "entry": entry,
                                 "chInfo": chInfo,
