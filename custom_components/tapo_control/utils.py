@@ -1955,7 +1955,7 @@ def processDownloadStatus(
             total = status.get("total")
 
         entryData["downloadProgress"] = message
-        entryData["lastMediaSyncActivity"] = datetime.datetime.utcnow().timestamp()
+        entryData["lastMediaSyncActivity"] = time.time()
         if progress_callback is not None:
             progress_callback(message, current, total)
         if hass:
@@ -2286,6 +2286,16 @@ async def getRecording(
         childID=childID,
         subfolder=subfolder,
     )
+    clip_key = f"{startDate}_{endDate}"
+    if os.path.exists(coldFilePath + ".corrupt") or clip_key in entryData.get("corruptClips", set()):
+        LOGGER.debug(
+            "[Media Sync - %s] Skipping corrupt recording %s (%s to %s)",
+            entry_id,
+            coldFilePath,
+            startDate,
+            endDate,
+        )
+        return None
     if not os.path.exists(coldFilePath):
         entry = hass.config_entries.async_get_entry(entry_id)
         entry_data_dict = entry.data if entry else {}
@@ -2381,6 +2391,7 @@ async def getRecording(
 
         entryData["isDownloadingStream"] = True
         downloadedFile = None
+        err_msg = ""
         try:
             if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
                 entryData["sdDownloadMethod"] = "Fast (Download Protocol)"
@@ -2422,8 +2433,17 @@ async def getRecording(
                         startDate,
                         endDate,
                     )
+                    cancel_event = entryData.get("mediaSyncCancelEvent")
+
+                    def on_act():
+                        entryData["lastMediaSyncActivity"] = time.time()
+
                     downloadedFile = await hass.async_add_executor_job(
-                        fast_downloader.sync_download, status_callback
+                        lambda: fast_downloader.sync_download(
+                            progress_callback=status_callback,
+                            cancel_event=cancel_event,
+                            on_activity=on_act,
+                        )
                     )
                     entryData["lastDownloadWarning"] = None
                 except Exception as err:
@@ -2451,6 +2471,31 @@ async def getRecording(
                 )
 
                 if selected_download_method == SD_DOWNLOAD_METHOD_FAST and is_continuous:
+                    if err_msg and (
+                        "remux failed" in err_msg.lower()
+                        or "dimensions not set" in err_msg.lower()
+                    ):
+                        failed_clips = entryData.setdefault("failedContinuousRemuxClips", {})
+                        failed_clips[clip_key] = failed_clips.get(clip_key, 0) + 1
+                        if failed_clips[clip_key] >= 2:
+                            entryData.setdefault("corruptClips", set()).add(clip_key)
+                            LOGGER.warning(
+                                "[Fast Download - %s] Continuous recording %s-%s failed ffmpeg remux repeatedly (%d attempts). "
+                                "Marking segment as corrupted on SD card and skipping in future cycles to prevent queue blockage.",
+                                device_name,
+                                startDate,
+                                endDate,
+                                failed_clips[clip_key],
+                            )
+                            try:
+                                corrupt_marker = coldFilePath + ".corrupt"
+                                os.makedirs(os.path.dirname(corrupt_marker), exist_ok=True)
+                                with open(corrupt_marker, "w") as f_c:
+                                    f_c.write(f"Corrupt SD recording: {err_msg}\n")
+                            except Exception as marker_err:
+                                LOGGER.debug("Could not write corrupt marker: %s", marker_err)
+                            return None
+
                     LOGGER.info(
                         "[Fast Download - %s] Fast download temporarily unavailable for continuous recording (%ds). "
                         "Skipping slow 1x playback fallback; will retry fast download on next cycle.",

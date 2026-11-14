@@ -20,6 +20,7 @@ import socket
 import subprocess
 import tempfile
 import time
+import threading
 import uuid
 from typing import Callable, Iterator
 
@@ -109,11 +110,23 @@ class ClipDemuxer:
         if self._rest:
             data, self._rest = self._rest + data, b""
         video = bytearray()
-        n = len(data) - len(data) % TS_PACKET
-        for off in range(0, n, TS_PACKET):
+        off = 0
+        total_len = len(data)
+        while off + TS_PACKET <= total_len:
+            if data[off] != 0x47:
+                next_sync = data.find(b"\x47", off)
+                if next_sync == -1:
+                    off = total_len
+                    break
+                if next_sync + TS_PACKET < total_len and data[next_sync + TS_PACKET] != 0x47:
+                    off = next_sync + 1
+                    continue
+                off = next_sync
+                if off + TS_PACKET > total_len:
+                    break
+
             pk = data[off : off + TS_PACKET]
-            if pk[0] != 0x47:
-                continue
+            off += TS_PACKET
             pid = ((pk[1] & 0x1F) << 8) | pk[2]
             pusi = pk[1] & 0x40
             afc = (pk[3] >> 4) & 3
@@ -140,7 +153,7 @@ class ClipDemuxer:
                     self.on_audio(bytes(payload))
             else:
                 video += pk
-        self._rest = data[n:]
+        self._rest = data[off:]
         if video:
             self.on_video(bytes(video))
 
@@ -465,7 +478,12 @@ class FastDownloader:
         self.audio_format = audio_format
         self.audio_rate = audio_rate
 
-    def sync_download(self, progress_callback: Callable[[dict | str], None] | None = None) -> dict:
+    def sync_download(
+        self,
+        progress_callback: Callable[[dict | str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+        on_activity: Callable[[], None] | None = None,
+    ) -> dict:
         """Synchronously download clip and remux into MP4. To be called inside executor."""
         segment_length = max(1, self.endDate - self.startDate)
         if progress_callback:
@@ -484,11 +502,43 @@ class FastDownloader:
             with open(temp_ts, "wb") as fv, open(temp_audio, "wb") as fa:
                 demux = ClipDemuxer(fv.write, fa.write)
 
+                last_progress_report = 0.0
+
+                def handle_data():
+                    nonlocal last_progress_report
+                    if on_activity:
+                        on_activity()
+                    now = time.time()
+                    if now - last_progress_report >= 5.0:
+                        last_progress_report = now
+                        if progress_callback:
+                            progress_callback(
+                                {
+                                    "currentAction": "Fast Downloading (SD)",
+                                    "fileName": self.output_video_path,
+                                    "progress": int(demux.video_seconds),
+                                    "total": segment_length,
+                                }
+                            )
+
+                def should_stop():
+                    return cancel_event is not None and cancel_event.is_set()
+
                 with MediaSession(self.host, self.cloud_password, port=self.port) as sess:
                     try:
-                        stream_clip(sess, self.startDate, self.endDate, demux)
+                        stream_clip(
+                            sess,
+                            self.startDate,
+                            self.endDate,
+                            demux,
+                            should_stop=should_stop,
+                            on_data=handle_data,
+                        )
                     finally:
                         sess.stop()
+
+            if cancel_event is not None and cancel_event.is_set():
+                raise FastMediaError("Download cancelled")
 
             if not os.path.exists(temp_ts) or os.path.getsize(temp_ts) == 0:
                 raise FastMediaError("No video data received from camera")
@@ -503,7 +553,22 @@ class FastDownloader:
                 and os.path.getsize(temp_audio) > 0
             )
 
-            cmd = [self.ffmpeg_bin, "-loglevel", "error", "-y", "-i", temp_ts]
+            cmd = [
+                self.ffmpeg_bin,
+                "-loglevel",
+                "error",
+                "-y",
+                "-fflags",
+                "+genpts+igndts+discardcorrupt",
+                "-err_detect",
+                "ignore_err",
+                "-probesize",
+                "50M",
+                "-analyzeduration",
+                "100M",
+                "-i",
+                temp_ts,
+            ]
             if has_audio:
                 cmd.extend(
                     [

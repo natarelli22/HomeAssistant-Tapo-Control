@@ -1,4 +1,5 @@
 import datetime
+import time
 from homeassistant.core import HomeAssistant
 from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.helpers.storage import Store
@@ -443,7 +444,7 @@ class TapoEnableMediaSyncSwitch(TapoSwitchEntity):
         await self._entry_storage.async_save(stored_data)
         self._entry[ENABLE_MEDIA_SYNC] = True
         self._attr_state = "on"
-        ts = datetime.datetime.utcnow().timestamp()
+        ts = time.time()
         self._entry["lastMediaSyncActivity"] = ts
         self._entry["lastMediaSyncStart"] = 0
         self._entry["downloadProgress"] = "Starting"
@@ -460,7 +461,7 @@ class TapoEnableMediaSyncSwitch(TapoSwitchEntity):
         self._entry[ENABLE_MEDIA_SYNC] = False
         self._attr_state = "off"
         self._entry["downloadProgress"] = "Disabled"
-        self._entry["lastMediaSyncActivity"] = datetime.datetime.utcnow().timestamp()
+        self._entry["lastMediaSyncActivity"] = time.time()
         self._trigger_sync_sensor_update()
         await async_update_sync_sensors(
             self._hass, self._config_entry.entry_id, self._entry
