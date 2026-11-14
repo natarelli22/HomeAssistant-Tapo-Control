@@ -515,7 +515,10 @@ class TapoSyncSensor(TapoSensorEntity):
             if data.get("sdDownloadMethod"):
                 attributes["sd_download_method"] = data["sdDownloadMethod"]
             if data.get("lastDownloadWarning"):
-                attributes["last_download_warning"] = data["lastDownloadWarning"]
+                warn = str(data["lastDownloadWarning"]).strip()
+                if len(warn) > 500:
+                    warn = warn[:500] + "..."
+                attributes["last_download_warning"] = warn
 
             if self._config_entry.data.get(SD_CHECK_GO2RTC_SESSION, True):
                 attributes["go2rtc_check_enabled"] = True

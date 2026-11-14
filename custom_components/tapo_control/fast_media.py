@@ -559,13 +559,7 @@ class FastDownloader:
                 "error",
                 "-y",
                 "-fflags",
-                "+genpts+igndts+discardcorrupt",
-                "-err_detect",
-                "ignore_err",
-                "-probesize",
-                "50M",
-                "-analyzeduration",
-                "100M",
+                "+genpts+igndts",
                 "-i",
                 temp_ts,
             ]
@@ -600,7 +594,55 @@ class FastDownloader:
             try:
                 res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
                 if res.returncode != 0:
-                    raise FastMediaError(f"ffmpeg remux failed: {res.stderr}")
+                    err_lines = [
+                        line.strip()
+                        for line in (res.stderr or "").splitlines()
+                        if line.strip()
+                    ]
+                    short_err = (
+                        " | ".join(err_lines[-3:])
+                        if err_lines
+                        else f"exit code {res.returncode}"
+                    )
+                    if len(short_err) > 300:
+                        short_err = short_err[-300:]
+                    raise FastMediaError(f"ffmpeg remux failed: {short_err}")
+
+                if not os.path.exists(temp_mp4) or os.path.getsize(temp_mp4) < 1024:
+                    raise FastMediaError("ffmpeg generated an empty or truncated MP4")
+
+                ffprobe_bin = shutil.which("ffprobe")
+                if ffprobe_bin:
+                    try:
+                        probe_res = subprocess.run(
+                            [
+                                ffprobe_bin,
+                                "-v",
+                                "error",
+                                "-select_streams",
+                                "v:0",
+                                "-show_entries",
+                                "stream=width,height",
+                                "-of",
+                                "csv=p=0",
+                                temp_mp4,
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                        dims = probe_res.stdout.strip().split(",")
+                        if len(dims) == 2:
+                            w, h = int(dims[0]), int(dims[1])
+                            if w < 320 or h < 240:
+                                raise FastMediaError(
+                                    f"ffmpeg produced unplayable MP4 with invalid resolution ({w}x{h})"
+                                )
+                    except (ValueError, subprocess.SubprocessError) as probe_err:
+                        if isinstance(probe_err, FastMediaError):
+                            raise
+                        LOGGER.debug("Post-download ffprobe validation skipped: %s", probe_err)
+
                 shutil.move(temp_mp4, self.output_video_path)
             except subprocess.TimeoutExpired as exc:
                 raise FastMediaError("ffmpeg remux timed out after 120s") from exc

@@ -2448,13 +2448,22 @@ async def getRecording(
                     entryData["lastDownloadWarning"] = None
                 except Exception as err:
                     err_msg = str(err)
-                    if "401" in err_msg or "authentication" in err_msg.lower():
+                    is_auth_error = (
+                        isinstance(err, FastMediaError) and getattr(err, "code", None) == 401
+                    ) or (
+                        "media authentication rejected" in err_msg.lower()
+                        or "check tapo cloud password" in err_msg.lower()
+                    )
+                    if is_auth_error:
                         warn_desc = (
                             "Authentication failure on media port 8800 (HTTP 401). "
                             "Check 'Cloud Password' in camera settings."
                         )
                     else:
-                        warn_desc = f"Error during fast download on port 8800: {err}"
+                        clean_err = err_msg.strip()
+                        if len(clean_err) > 300:
+                            clean_err = clean_err[:300] + "..."
+                        warn_desc = f"Error during fast download on port 8800: {clean_err}"
                     LOGGER.warning(
                         "[Fast Download - %s] %s",
                         device_name,
@@ -2471,16 +2480,22 @@ async def getRecording(
                 )
 
                 if selected_download_method == SD_DOWNLOAD_METHOD_FAST and is_continuous:
-                    if err_msg and (
-                        "remux failed" in err_msg.lower()
-                        or "dimensions not set" in err_msg.lower()
+                    if err_msg and any(
+                        term in err_msg.lower()
+                        for term in (
+                            "remux failed",
+                            "dimensions not set",
+                            "unplayable mp4",
+                            "invalid resolution",
+                            "invalid argument",
+                        )
                     ):
                         failed_clips = entryData.setdefault("failedContinuousRemuxClips", {})
                         failed_clips[clip_key] = failed_clips.get(clip_key, 0) + 1
-                        if failed_clips[clip_key] >= 2:
+                        if failed_clips[clip_key] >= 1:
                             entryData.setdefault("corruptClips", set()).add(clip_key)
                             LOGGER.warning(
-                                "[Fast Download - %s] Continuous recording %s-%s failed ffmpeg remux repeatedly (%d attempts). "
+                                "[Fast Download - %s] Continuous recording %s-%s failed ffmpeg remux (%d attempts). "
                                 "Marking segment as corrupted on SD card and skipping in future cycles to prevent queue blockage.",
                                 device_name,
                                 startDate,
@@ -2491,7 +2506,10 @@ async def getRecording(
                                 corrupt_marker = coldFilePath + ".corrupt"
                                 os.makedirs(os.path.dirname(corrupt_marker), exist_ok=True)
                                 with open(corrupt_marker, "w") as f_c:
-                                    f_c.write(f"Corrupt SD recording: {err_msg}\n")
+                                    clean_reason = err_msg.strip()
+                                    if len(clean_reason) > 200:
+                                        clean_reason = clean_reason[:200]
+                                    f_c.write(f"Corrupt SD recording: {clean_reason}\n")
                             except Exception as marker_err:
                                 LOGGER.debug("Could not write corrupt marker: %s", marker_err)
                             return None
