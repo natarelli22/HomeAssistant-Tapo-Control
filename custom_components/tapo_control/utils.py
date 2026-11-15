@@ -100,6 +100,58 @@ from .osd_sync import async_detect_event_preroll
 
 UUID = uuid.uuid4().hex
 ALARM_CONFIG_TYPES = ("getAlarm", "getAlarmConfig", "getAlertConfig")
+PAST_DAY_RECORDINGS_CACHE_TTL = 600
+FAST_PORT_RETRY_DELAY_SECONDS = 4
+_TRANSIENT_CONNECTION_TOKENS = (
+    "connection closed by camera",
+    "could not connect",
+    "connection refused",
+    "connection reset",
+    "timed out",
+    "broken pipe",
+    "remotedisconnected",
+    "max retries exceeded",
+    "temporarily unavailable",
+    "network is unreachable",
+    "errno 111",
+    "errno 104",
+    "errno 110",
+)
+
+
+def is_transient_connection_error(err: Exception | str) -> bool:
+    """Return True for transient TCP/HTTP connection failures (excluding auth/Tapo RPC errors)."""
+    if isinstance(err, (ConnectionError, TimeoutError, socket.timeout)):
+        return True
+    err_str = str(err).lower()
+    if "-71105" in err_str or "-40401" in err_str or "invalid authentication" in err_str:
+        return False
+    return any(tok in err_str for tok in _TRANSIENT_CONNECTION_TOKENS)
+
+
+def _truncate_download_warning(msg: str, max_len: int = 300) -> str:
+    clean = str(msg).strip()
+    if len(clean) > max_len:
+        return clean[:max_len] + "..."
+    return clean
+
+
+def _resolve_synced_stem_start(
+    cur_stem: str,
+    expected_orig_stem: str,
+    startDate: int,
+    endDate: int,
+    childID: str = "",
+) -> tuple[int, str]:
+    """Extract synced start timestamp and stem if a clip was already pre-roll renamed."""
+    if cur_stem != expected_orig_stem:
+        prefix = f"{childID}-" if childID else ""
+        suffix = f"-{endDate}"
+        if cur_stem.startswith(prefix) and cur_stem.endswith(suffix):
+            mid = cur_stem[len(prefix) : -len(suffix)]
+            if mid.isdigit():
+                return int(mid), cur_stem
+    return int(startDate), expected_orig_stem
 
 
 def isBatteryPowered(camData):
@@ -341,25 +393,51 @@ def getHotDirPathForEntry(hass: HomeAssistant, entry_id: str):
     return hotDirPath.rstrip("/")
 
 
-async def getRecordings(hass, entryData, tapoController, date):
+async def getRecordings(
+    hass,
+    entryData,
+    tapoController,
+    date,
+    use_past_day_cache: bool = False,
+):
+    """Fetch camera recordings for a date, optionally serving cached results for settled past days."""
     LOGGER.debug("Getting recordings for date " + date + "...")
     childID = ""
     if entryData["isChild"]:
         childID = entryData["camData"]["basic_info"]["dev_id"]
+
+    def _populate_scan_result(day_recordings):
+        if day_recordings is None:
+            return
+        for recording in day_recordings:
+            for recordingKey in recording:
+                entryData["mediaScanResult"][
+                    ((childID + "-") if childID != "" else "")
+                    + str(recording[recordingKey]["startTime"])
+                    + "-"
+                    + str(recording[recordingKey]["endTime"])
+                ] = True
+
+    if use_past_day_cache:
+        cache = entryData.setdefault("pastDayRecordingsCache", {})
+        cached = cache.get(date)
+        if cached is not None and (time.time() - cached["ts"]) < PAST_DAY_RECORDINGS_CACHE_TTL:
+            _populate_scan_result(cached["data"])
+            return cached["data"]
+
     recordingsForDay = []
     try:
         recordingsForDay = await hass.async_add_executor_job(
             tapoController.getRecordings, date
         )
-        if recordingsForDay is not None:
-            for recording in recordingsForDay:
-                for recordingKey in recording:
-                    entryData["mediaScanResult"][
-                        ((childID + "-") if childID != "" else "")
-                        + str(recording[recordingKey]["startTime"])
-                        + "-"
-                        + str(recording[recordingKey]["endTime"])
-                    ] = True
+        _populate_scan_result(recordingsForDay)
+        if use_past_day_cache and recordingsForDay is not None:
+            cache = entryData.setdefault("pastDayRecordingsCache", {})
+            cache[date] = {"ts": time.time(), "data": recordingsForDay}
+            if len(cache) > 14:
+                cutoff = time.time() - PAST_DAY_RECORDINGS_CACHE_TTL
+                for old_date in [k for k, v in cache.items() if v["ts"] < cutoff]:
+                    cache.pop(old_date, None)
     except Exception as err:
         if "-71105" in str(err):
             LOGGER.debug(
@@ -913,17 +991,21 @@ async def processDownload(
     )
     cur_stem = os.path.splitext(os.path.basename(coldFilePath))[0]
     expected_orig_stem = getFileName(startDate, endDate, False, childID=childID)
+    preroll_checked = entryData.setdefault("prerollCheckedClips", set())
+    preroll_key = f"{childID}_{startDate}_{endDate}"
 
     if cur_stem != expected_orig_stem:
         # File was already pre-roll synced
-        prefix = f"{childID}-" if childID else ""
-        suffix = f"-{endDate}"
-        if cur_stem.startswith(prefix) and cur_stem.endswith(suffix):
-            mid = cur_stem[len(prefix) : -len(suffix)]
-            if mid.isdigit():
-                actual_startDate = int(mid)
-                actual_filePath = cur_stem
-    elif recordings_source == RECORDINGS_SOURCE_SD and enable_preroll and is_event:
+        actual_startDate, actual_filePath = _resolve_synced_stem_start(
+            cur_stem, expected_orig_stem, startDate, endDate, childID=childID
+        )
+        preroll_checked.add(preroll_key)
+    elif (
+        recordings_source == RECORDINGS_SOURCE_SD
+        and enable_preroll
+        and is_event
+        and preroll_key not in preroll_checked
+    ):
         try:
             _ffmpeg = hass.data.get(DATA_FFMPEG)
             ffmpeg_bin = _ffmpeg.binary if _ffmpeg else "ffmpeg"
@@ -983,6 +1065,7 @@ async def processDownload(
                     startDate,
                     endDate,
                 )
+            preroll_checked.add(preroll_key)
         except Exception as err:
             LOGGER.warning(
                 "[Pre-roll Sync - %s] Error detecting pre-roll for %s-%s: %s",
@@ -2260,7 +2343,6 @@ async def getRecording(
         Callable[[str, Optional[float], Optional[float]], None]
     ] = None,
 ) -> str:
-    timeCorrection = await hass.async_add_executor_job(tapo.getTimeCorrection)
     startDate = int(startDate)
     endDate = int(endDate)
 
@@ -2270,12 +2352,6 @@ async def getRecording(
 
     coldDirPath = getColdDirPathForEntry(hass, entry_id)
     downloadUID = getFileName(startDate, endDate, False, childID=childID)
-
-    #If the cold path is on an smb share or something similar, the videos folder gets cached but can break if something on the nas changes (folder removal or network hiccups)
-    #Therefore simply create the folder unconditionally and fail fast if it already exists. This also helps in recaching the files in the folder.
-    await hass.async_add_executor_job(
-        pathlib.Path(coldDirPath + "/videos").mkdir, 0o777, True, True
-    )
 
     coldFilePath = getColdFile(
         hass,
@@ -2296,9 +2372,60 @@ async def getRecording(
             endDate,
         )
         return None
+
+    entry = hass.config_entries.async_get_entry(entry_id) if hass else None
+    entry_data_dict = entry.data if entry else {}
+
+    if os.path.exists(coldFilePath):
+        cur_stem = os.path.splitext(os.path.basename(coldFilePath))[0]
+        actual_start, _ = _resolve_synced_stem_start(
+            cur_stem, downloadUID, startDate, endDate, childID=childID
+        )
+        recordings_source = entry_data_dict.get(
+            RECORDINGS_SOURCE,
+            entry_data_dict.get("media_sync_source", RECORDINGS_SOURCE_SD),
+        )
+        enable_preroll = bool(
+            entryData.get(
+                ENABLE_EVENT_PREROLL_SYNC,
+                entry_data_dict.get(ENABLE_EVENT_PREROLL_SYNC, False),
+            )
+        )
+        is_event = (subfolder == SUBDIR_EVENTS) or (
+            subfolder is None and (endDate - startDate) < 900
+        )
+        preroll_key = f"{childID}_{startDate}_{endDate}"
+        needs_preroll_check = (
+            recordings_source == RECORDINGS_SOURCE_SD
+            and enable_preroll
+            and is_event
+            and cur_stem == downloadUID
+            and preroll_key not in entryData.get("prerollCheckedClips", set())
+        )
+        scan_name = ((childID + "-") if childID != "" else "") + str(startDate) + "-" + str(endDate)
+        if (
+            downloadUID in entryData.get("downloadedStreams", {})
+            and scan_name in entryData.get("mediaScanResult", {})
+            and not needs_preroll_check
+        ):
+            thumb_path = getColdFile(
+                hass,
+                entry_id,
+                actual_start,
+                endDate,
+                "thumbs",
+                childID=childID,
+                subfolder=subfolder,
+            )
+            if os.path.exists(thumb_path):
+                return coldFilePath
+
     if not os.path.exists(coldFilePath):
-        entry = hass.config_entries.async_get_entry(entry_id)
-        entry_data_dict = entry.data if entry else {}
+        #If the cold path is on an smb share or something similar, the videos folder gets cached but can break if something on the nas changes (folder removal or network hiccups)
+        #Therefore simply create the folder unconditionally and fail fast if it already exists. This also helps in recaching the files in the folder.
+        await hass.async_add_executor_job(
+            pathlib.Path(coldDirPath + "/videos").mkdir, 0o777, True, True
+        )
         selected_download_method = entry_data_dict.get(
             SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
         )
@@ -2392,6 +2519,7 @@ async def getRecording(
         entryData["isDownloadingStream"] = True
         downloadedFile = None
         err_msg = ""
+        transient_fast_conn_error = False
         try:
             if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
                 entryData["sdDownloadMethod"] = "Fast (Download Protocol)"
@@ -2438,13 +2566,35 @@ async def getRecording(
                     def on_act():
                         entryData["lastMediaSyncActivity"] = time.time()
 
-                    downloadedFile = await hass.async_add_executor_job(
-                        lambda: fast_downloader.sync_download(
+                    def _run_fast_download():
+                        return fast_downloader.sync_download(
                             progress_callback=status_callback,
                             cancel_event=cancel_event,
                             on_activity=on_act,
                         )
-                    )
+
+                    try:
+                        downloadedFile = await hass.async_add_executor_job(
+                            _run_fast_download
+                        )
+                    except Exception as first_err:
+                        if is_transient_connection_error(first_err) and not (
+                            cancel_event and cancel_event.is_set()
+                        ):
+                            LOGGER.debug(
+                                "[Fast Download - %s] Transient port 8800 connection error (%s); retrying once in %ds",
+                                device_name,
+                                _truncate_download_warning(first_err),
+                                FAST_PORT_RETRY_DELAY_SECONDS,
+                            )
+                            await asyncio.sleep(FAST_PORT_RETRY_DELAY_SECONDS)
+                            if cancel_event and cancel_event.is_set():
+                                raise first_err
+                            downloadedFile = await hass.async_add_executor_job(
+                                _run_fast_download
+                            )
+                        else:
+                            raise
                     entryData["lastDownloadWarning"] = None
                 except Exception as err:
                     err_msg = str(err)
@@ -2454,16 +2604,19 @@ async def getRecording(
                         "media authentication rejected" in err_msg.lower()
                         or "check tapo cloud password" in err_msg.lower()
                     )
+                    transient_fast_conn_error = (
+                        not is_auth_error
+                    ) and is_transient_connection_error(err)
                     if is_auth_error:
                         warn_desc = (
                             "Authentication failure on media port 8800 (HTTP 401). "
                             "Check 'Cloud Password' in camera settings."
                         )
                     else:
-                        clean_err = err_msg.strip()
-                        if len(clean_err) > 300:
-                            clean_err = clean_err[:300] + "..."
-                        warn_desc = f"Error during fast download on port 8800: {clean_err}"
+                        warn_desc = (
+                            "Error during fast download on port 8800: "
+                            + _truncate_download_warning(err_msg)
+                        )
                     LOGGER.warning(
                         "[Fast Download - %s] %s",
                         device_name,
@@ -2478,6 +2631,19 @@ async def getRecording(
                     or item_type == "recording"
                     or duration_seconds > 120
                 )
+
+                if (
+                    selected_download_method == SD_DOWNLOAD_METHOD_FAST
+                    and transient_fast_conn_error
+                ):
+                    LOGGER.info(
+                        "[Fast Download - %s] Transient port 8800 connection error persisted after retry (%ds clip); "
+                        "skipping same-port legacy fallback until next cycle.",
+                        device_name,
+                        duration_seconds,
+                    )
+                    entryData["sdDownloadMethod"] = "Fast (Retry Pending)"
+                    return None
 
                 if selected_download_method == SD_DOWNLOAD_METHOD_FAST and is_continuous:
                     if err_msg and any(
@@ -2506,9 +2672,7 @@ async def getRecording(
                                 corrupt_marker = coldFilePath + ".corrupt"
                                 os.makedirs(os.path.dirname(corrupt_marker), exist_ok=True)
                                 with open(corrupt_marker, "w") as f_c:
-                                    clean_reason = err_msg.strip()
-                                    if len(clean_reason) > 200:
-                                        clean_reason = clean_reason[:200]
+                                    clean_reason = _truncate_download_warning(err_msg, 200)
                                     f_c.write(f"Corrupt SD recording: {clean_reason}\n")
                             except Exception as marker_err:
                                 LOGGER.debug("Could not write corrupt marker: %s", marker_err)
@@ -2534,6 +2698,7 @@ async def getRecording(
                     if entryData.get("sdDownloadMethod") != "Legacy (Fallback)":
                         entryData["sdDownloadMethod"] = "Legacy (Playback)"
 
+                timeCorrection = await hass.async_add_executor_job(tapo.getTimeCorrection)
                 target_video_dir = (
                     os.path.dirname(coldFilePath) + "/"
                     if selected_download_method == SD_DOWNLOAD_METHOD_FAST
@@ -2555,12 +2720,13 @@ async def getRecording(
                 try:
                     downloadedFile = await downloader.downloadFile(status_callback)
                 except Exception as legacy_err:
+                    clean_legacy_err = _truncate_download_warning(str(legacy_err))
                     LOGGER.warning(
                         "[Download Fallback - %s] Legacy downloader failed: %s",
                         device_name,
-                        legacy_err,
+                        clean_legacy_err,
                     )
-                    entryData["lastDownloadWarning"] = str(legacy_err)
+                    entryData["lastDownloadWarning"] = clean_legacy_err
                     downloadedFile = None
                 finally:
                     if (

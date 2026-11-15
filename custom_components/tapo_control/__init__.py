@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import asyncio
+import pathlib
 import time
 import threading
 from aiohttp import ClientError
@@ -118,6 +119,7 @@ from .utils import (
     getLatestFirmwareVersion,
     findMedia,
     getRecordings,
+    is_transient_connection_error,
     scheduleAll,
     warm_up_date_formatter,
     async_update_sync_sensors,
@@ -128,6 +130,40 @@ from pytapo.version import PYTAPO_VERSION
 from datetime import time as dt_time, timedelta
 
 from .utils import getRecording
+
+
+def _is_settled_past_day(date_str: str, now_ts: float) -> bool:
+    """Return True when YYYYMMDD ended at least 2 hours before now_ts."""
+    try:
+        return now_ts >= (convert_to_timestamp(date_str) + 86400 + 7200)
+    except Exception:
+        return False
+
+
+async def _call_with_transient_retry(
+    coro_factory,
+    logger_prefix: str,
+    retries: int = 1,
+    delay: float = 3.0,
+):
+    """Run an async camera call once and retry briefly on transient connection errors."""
+    attempt = 0
+    while True:
+        try:
+            return await coro_factory()
+        except Exception as err:
+            if attempt >= retries or not is_transient_connection_error(err):
+                raise
+            attempt += 1
+            LOGGER.debug(
+                "%s Transient connection error (%s); retrying in %.1fs (%d/%d)",
+                logger_prefix,
+                err,
+                delay,
+                attempt,
+                retries,
+            )
+            await asyncio.sleep(delay)
 
 
 async def async_setup(hass: HomeAssistant, config: dict):
@@ -1494,9 +1530,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 try:
                     await async_update_sync_sensors(hass, entry.entry_id, device)
                     tapoController: Tapo = device["controller"]
+                    sync_log_prefix = f"[Media Sync - {device.get('name', entry.entry_id)}]"
+                    coldDirPath = getColdDirPathForEntry(hass, entry.entry_id)
+                    await hass.async_add_executor_job(
+                        pathlib.Path(coldDirPath + "/videos").mkdir, 0o777, True, True
+                    )
                     LOGGER.debug("getRecordingsList -1")
-                    recordingsList = await hass.async_add_executor_job(
-                        tapoController.getRecordingsList
+                    recordingsList = await _call_with_transient_retry(
+                        lambda: hass.async_add_executor_job(
+                            tapoController.getRecordingsList
+                        ),
+                        sync_log_prefix,
                     )
                     LOGGER.debug("getRecordingsList -2")
 
@@ -1539,11 +1583,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         for d_str in matched_dates:
                             if device.get("fastDownloadDelayedUntil", 0) > time.time():
                                 break
-                            recordingsForDay = await getRecordings(
-                                hass,
-                                device,
-                                tapoController,
-                                d_str,
+                            use_past_cache = _is_settled_past_day(d_str, ts)
+                            recordingsForDay = await _call_with_transient_retry(
+                                lambda d=d_str, cache_ok=use_past_cache: getRecordings(
+                                    hass,
+                                    device,
+                                    tapoController,
+                                    d,
+                                    use_past_day_cache=cache_ok,
+                                ),
+                                sync_log_prefix,
                             )
                             day_events = []
                             day_continuous = []
@@ -1626,11 +1675,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         for d_str in matched_dates:
                             if device.get("fastDownloadDelayedUntil", 0) > time.time():
                                 break
-                            recordingsForDay = await getRecordings(
-                                hass,
-                                device,
-                                tapoController,
-                                d_str,
+                            use_past_cache = _is_settled_past_day(d_str, ts)
+                            recordingsForDay = await _call_with_transient_retry(
+                                lambda d=d_str, cache_ok=use_past_cache: getRecordings(
+                                    hass,
+                                    device,
+                                    tapoController,
+                                    d,
+                                    use_past_day_cache=cache_ok,
+                                ),
+                                sync_log_prefix,
                             )
                             totalRecordingsToDownload = 0
                             for recording in recordingsForDay:
@@ -1692,8 +1746,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                             device["runningMediaSync"] = False
                                             LOGGER.error("[Media Sync - %s] Error downloading recording: %s", device.get("name"), err)
                     device["lastMediaSyncSuccess"] = time.time()
+                    device["mediaSyncConsecutiveConnErrors"] = 0
                 except Exception as err:
-                    LOGGER.error(err)
+                    if is_transient_connection_error(err):
+                        err_count = device.get("mediaSyncConsecutiveConnErrors", 0) + 1
+                        device["mediaSyncConsecutiveConnErrors"] = err_count
+                        if err_count >= 3:
+                            LOGGER.error(
+                                "[Media Sync - %s] Connection failed for %d consecutive cycles: %s",
+                                device.get("name"),
+                                err_count,
+                                err,
+                            )
+                        else:
+                            LOGGER.warning(
+                                "[Media Sync - %s] Transient connection error (cycle %d/3, will retry next cycle): %s",
+                                device.get("name"),
+                                err_count,
+                                err,
+                            )
+                    else:
+                        LOGGER.error(err)
                 finally:
                     LOGGER.debug("runningMediaSync -false")
                     cancel_ev = device.get("mediaSyncCancelEvent")
