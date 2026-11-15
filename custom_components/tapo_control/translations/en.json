@@ -285,6 +285,11 @@
       "nightlight": {
         "name": "Nightlight"
       }
+    },
+    "media_player": {
+      "music_player": {
+        "name": "Music player"
+      }
     }
   },
   "selector": {
