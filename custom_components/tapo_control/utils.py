@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import socket
+import tempfile
 import time
 import urllib.parse
 import uuid
@@ -448,7 +449,19 @@ async def getRecordings(
     return recordingsForDay
 
 
+def validateDeviceID(device_id):
+    """Reject device IDs that cannot safely form a path component."""
+    if (
+        not isinstance(device_id, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]+", device_id) is None
+    ):
+        raise ValueError("Invalid device ID: use ASCII letters, digits, '_' or '-'")
+    return device_id
+
+
 def getEntryStorageFile(config_entry, child_id=""):
+    if child_id != "":
+        validateDeviceID(child_id)
     return f"tapo_control_{config_entry.entry_id}{child_id}"
 
 
@@ -497,8 +510,7 @@ async def preloadRecordingThumbnails(
             return
         tasks = (entryData.get("manualDownloadTask"), entryData.get("mediaSyncTask"))
         if (
-            entryData.get("thumbnailPreloadStopped")
-            or entryData.get("isDownloadingStream")
+            entryData.get("isDownloadingStream")
             or entryData.get("runningMediaSync")
             or any(task and not task.done() for task in tasks)
         ):
@@ -525,7 +537,10 @@ async def _preloadRecordingThumbnails(hass, entryData, entry_id, recordingsByDat
     thumbnails = {}
     thumbnailDates = {}
     thumbnailRecordings = {}
+    stoppedDays = entryData.setdefault("thumbnailPreloadStoppedDays", set())
     for date, recordings in recordingsByDate.items():
+        if date in stoppedDays:
+            continue
         checked = processed.setdefault(date, set())
         current = {
             (int(recording["startTime"]), int(recording["endTime"]))
@@ -666,7 +681,8 @@ async def _preloadRecordingThumbnails(hass, entryData, entry_id, recordingsByDat
                         )
                     else:
                         missingCount += 1
-                        entryData["thumbnailPreloadStopped"] = True
+                        # other days may still have thumbnails, e.g. newer ones on a hub
+                        stoppedDays.add(date)
                         LOGGER.debug(
                             "Thumbnail %s/%s for %s: no JPEG returned after %.3fs "
                             "for start_time=%s (no-data timeout=%ss). "
@@ -710,7 +726,7 @@ async def findMedia(hass, entryData, entry, recordingsList=None):
     LOGGER.debug("Finding media for " + entryData["name"] + "...")
     entryData["initialMediaScanDone"] = False
     entryData["thumbnailProcessed"] = {}
-    entryData["thumbnailPreloadStopped"] = False
+    entryData["thumbnailPreloadStoppedDays"] = set()
     childID = ""
     if entryData["isChild"]:
         childID = entryData["camData"]["basic_info"]["dev_id"]
@@ -857,12 +873,18 @@ async def findMedia(hass, entryData, entry, recordingsList=None):
 def saveThumbnail(filePath, image):
     """Publish a complete thumbnail in cold storage from the executor."""
     path = pathlib.Path(filePath)
-    temporaryPath = path.with_suffix(".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporaryPath = None
     try:
-        temporaryPath.write_bytes(image)
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=path.parent, prefix=".tapo-", suffix=".tmp", delete=False
+        ) as temporary:
+            temporaryPath = pathlib.Path(temporary.name)
+            temporary.write(image)
         temporaryPath.replace(path)
     finally:
-        temporaryPath.unlink(missing_ok=True)
+        if temporaryPath is not None:
+            temporaryPath.unlink(missing_ok=True)
 
     # Check if a pre-roll synchronized video exists for this event and link it
     try:
@@ -1129,12 +1151,7 @@ async def generateThumb(
                 output_format=IMAGE_JPEG,
             )
         )
-        def _write_thumb_file(path, data):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "wb") as binary_file:
-                binary_file.write(data)
-
-        await hass.async_add_executor_job(_write_thumb_file, filePathThumb, image)
+        await hass.async_add_executor_job(saveThumbnail, filePathThumb, image)
     return filePathThumb
 
 
@@ -2048,6 +2065,10 @@ def processDownloadStatus(
 
 
 def getFileName(startDate: int, endDate: int, encrypted=False, childID=""):
+    if childID != "":
+        validateDeviceID(childID)
+    startDate = int(startDate)
+    endDate = int(endDate)
     if encrypted:
         return hashlib.md5(
             (str(childID) + str(startDate) + str(endDate)).encode()
@@ -2109,12 +2130,61 @@ def getColdFile(
                 return cand_path
         return None
 
-    entry = hass.config_entries.async_get_entry(entry_id) if hass else None
-    entry_data = entry.data if entry else {}
-    download_method = entry_data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+    def _resolve_cold_path() -> str:
+        entry = hass.config_entries.async_get_entry(entry_id) if hass else None
+        entry_data = entry.data if entry else {}
+        download_method = entry_data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
 
-    # In Fast mode, use subfolder structure
-    if download_method == SD_DOWNLOAD_METHOD_FAST:
+        # In Fast mode, use subfolder structure
+        if download_method == SD_DOWNLOAD_METHOD_FAST:
+            if subfolder:
+                sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
+                if os.path.exists(sub_path):
+                    return sub_path
+                preroll_sub = _find_preroll_match(os.path.join(coldDirPath, folder, subfolder))
+                if preroll_sub:
+                    return preroll_sub
+                # Retrocompatibility: if file exists in root, return it
+                root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+                if os.path.exists(root_path):
+                    return root_path
+                preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
+                if preroll_root:
+                    return preroll_root
+                return sub_path
+
+            # If subfolder is not specified in Fast mode, first check existing files in subfolders
+            events_path = os.path.join(coldDirPath, folder, SUBDIR_EVENTS, f"{fileName}{extension}")
+            if os.path.exists(events_path):
+                return events_path
+            preroll_events = _find_preroll_match(os.path.join(coldDirPath, folder, SUBDIR_EVENTS))
+            if preroll_events:
+                return preroll_events
+            cont_path = os.path.join(coldDirPath, folder, SUBDIR_CONTINUOUS, f"{fileName}{extension}")
+            if os.path.exists(cont_path):
+                return cont_path
+            root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+            if os.path.exists(root_path):
+                return root_path
+            preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
+            if preroll_root:
+                return preroll_root
+
+            # If file does not exist yet, infer subfolder based on duration (>= 15 min is continuous)
+            try:
+                duration = int(endDate) - int(startDate)
+                inferred = SUBDIR_CONTINUOUS if duration >= 900 else SUBDIR_EVENTS
+            except Exception:
+                inferred = SUBDIR_EVENTS
+            return os.path.join(coldDirPath, folder, inferred, f"{fileName}{extension}")
+
+        # In Legacy mode (or without subfolder), use traditional root path
+        root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+        if os.path.exists(root_path):
+            return root_path
+        preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
+        if preroll_root:
+            return preroll_root
         if subfolder:
             sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
             if os.path.exists(sub_path):
@@ -2122,55 +2192,14 @@ def getColdFile(
             preroll_sub = _find_preroll_match(os.path.join(coldDirPath, folder, subfolder))
             if preroll_sub:
                 return preroll_sub
-            # Retrocompatibility: if file exists in root, return it
-            root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-            if os.path.exists(root_path):
-                return root_path
-            preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
-            if preroll_root:
-                return preroll_root
-            return sub_path
-
-        # If subfolder is not specified in Fast mode, first check existing files in subfolders
-        events_path = os.path.join(coldDirPath, folder, SUBDIR_EVENTS, f"{fileName}{extension}")
-        if os.path.exists(events_path):
-            return events_path
-        preroll_events = _find_preroll_match(os.path.join(coldDirPath, folder, SUBDIR_EVENTS))
-        if preroll_events:
-            return preroll_events
-        cont_path = os.path.join(coldDirPath, folder, SUBDIR_CONTINUOUS, f"{fileName}{extension}")
-        if os.path.exists(cont_path):
-            return cont_path
-        root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-        if os.path.exists(root_path):
-            return root_path
-        preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
-        if preroll_root:
-            return preroll_root
-
-        # If file does not exist yet, infer subfolder based on duration (>= 15 min is continuous)
-        try:
-            duration = int(endDate) - int(startDate)
-            inferred = SUBDIR_CONTINUOUS if duration >= 900 else SUBDIR_EVENTS
-        except Exception:
-            inferred = SUBDIR_EVENTS
-        return os.path.join(coldDirPath, folder, inferred, f"{fileName}{extension}")
-
-    # In Legacy mode (or without subfolder), use traditional root path
-    root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-    if os.path.exists(root_path):
         return root_path
-    preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
-    if preroll_root:
-        return preroll_root
-    if subfolder:
-        sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
-        if os.path.exists(sub_path):
-            return sub_path
-        preroll_sub = _find_preroll_match(os.path.join(coldDirPath, folder, subfolder))
-        if preroll_sub:
-            return preroll_sub
-    return root_path
+
+    coldFilePath = _resolve_cold_path()
+    if not pathlib.Path(coldFilePath).resolve().is_relative_to(
+        pathlib.Path(coldDirPath).resolve()
+    ):
+        raise ValueError("Media path escapes cold storage")
+    return coldFilePath
 
 
 def reorganize_media_storage(hass: HomeAssistant, entry_id: str) -> None:
@@ -2302,6 +2331,10 @@ async def getHotFile(
     extension = pathlib.Path(coldFilePath).suffix
     fileNameEncrypted = getFileName(startDate, endDate, True, childID=childID)
     hotFilePath = f"{hotDirPath}/{folder}/{fileNameEncrypted}{UUID}{extension}"
+    if not pathlib.Path(hotFilePath).resolve().is_relative_to(
+        pathlib.Path(hotDirPath).resolve()
+    ):
+        raise ValueError("Media path escapes hot storage")
 
     if not os.path.exists(hotFilePath):
         if not os.path.exists(coldFilePath):
@@ -3053,6 +3086,9 @@ async def getCamData(hass, controller, chInfo=None):
     else:
         camData["basic_info"] = data["getDeviceInfo"][0]["device_info"]["basic_info"]
 
+    if "dev_id" in camData["basic_info"]:
+        validateDeviceID(camData["basic_info"]["dev_id"])
+
     try:
         motion_detection_data = data["getDetectionConfig"][0]["motion_detection"][
             "motion_det"
@@ -3748,6 +3784,9 @@ async def getCamData(hass, controller, chInfo=None):
         childDevices = data["getChildDeviceList"][0]
     except Exception:
         childDevices = None
+    if childDevices:
+        for childDevice in childDevices.get("child_device_list", []):
+            validateDeviceID(childDevice["device_id"])
     camData["childDevices"] = childDevices
 
     try:
@@ -4478,15 +4517,18 @@ async def scheduleAll(hass, device, entry, mediaSync):
         device["lastMediaScanAttempt"] = now
         LOGGER.debug("Media scan running")
         device["initialMediaScanRunning"] = True
+        entry.async_create_background_task(
+            hass, scanMedia(hass, device, entry), "findMedia"
+        )
+
+
+async def scanMedia(hass, device, entry):
+    """Scan one device of an entry at a time, a hub's cameras share its session."""
+    lock = hass.data[DOMAIN][entry.entry_id].setdefault("mediaScanLock", asyncio.Lock())
+    async with lock:
         try:
             recordingsList = await hass.async_add_executor_job(
                 device["controller"].getRecordingsList
-            )
-            device["mediaSyncAvailable"] = True
-            entry.async_create_background_task(
-                hass,
-                findMedia(hass, device, entry, recordingsList),
-                "findMedia",
             )
         except Exception as err:
             device["initialMediaScanRunning"] = False
@@ -4499,6 +4541,9 @@ async def scheduleAll(hass, device, entry, mediaSync):
             else:
                 LOGGER.info(errMsg)
                 LOGGER.info(device["name"] + ": " + str(err))
+            return
+        device["mediaSyncAvailable"] = True
+        await findMedia(hass, device, entry, recordingsList)
 
 
 async def check_functionality(entry, hass, cls, check_function):
