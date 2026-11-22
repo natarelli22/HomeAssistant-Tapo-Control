@@ -78,10 +78,11 @@ This custom component creates:
 
 Doorbells, Cameras (for each lens, if supported):
 
-- Up to 4 camera entities: HD and SD, using RTSP standard or TP-Link proprietary video protocol. If you choose to use direct entities, it is recommended to disable `Use Stream from Home Assistant` in options for the best performance and battery life.
+- HD and SD camera entities using RTSP or the TP-Link proprietary protocol (Direct). See the [streaming FAQ](#troubleshooting--faq) for playback options.
 - Binary sensor for motion after the motion is detected for the first time and a binary sensor for doorbell press
 - Light entity, if the camera supports a floodlight switch and nightlight light entity with on/off and brightness control
 - Media player entity, if the camera has a built-in music player (e.g. C840): play/pause, previous/next track, track selection, repeat (song or playlist) and volume
+- Speaker media player for playing audio and TTS on cameras with a speaker and a configured Cloud Password
 - Buttons for Calibrate, Format, Manual Alarm start & stop, Moving the camera, Reboot and syncing time
 - Switch entities for Auto track, Automatic Reboot, Flip setting, LED Indicator, Lens Distortion Correction, (Rich) Notifications, Recording, Microphone Mute, Microphone Noise Cancelling, Automatically Upgrade Firmware, HDR mode, Alarm Trigger Event types, Privacy Zones, Diagnose Mode, Smart Track specific switches, Smart Dual Track specific switches, Preset Patrol Mode, Audio Recording and Privacy mode
 - Select entities for Automatic Alarm, Automatic Reboot Time, Light Frequency, Motion Detection, Night Vision, Spotlight Intensity, Alarm Type, Quick Response, Smart Dual Track Method and Move to Preset
@@ -142,6 +143,25 @@ data:
 After the call, check the camera entity's `record_plan` attribute and the schedule in the Tapo app. The **Record to SD Card** switch reflects whether recording is enabled.
 
 </details>
+
+## Two-way audio (preview)
+
+Native WebRTC and talk are **opt-in**. In the integration options, choose **Configure device** and enable **Native WebRTC and two-way audio (experimental)**. This player may increase CPU use.
+
+Talk requires Home Assistant 2026.11+, a camera with a speaker, and a configured **Cloud Password**. Enable **Settings > System > Labs > Two-way audio**, then open the camera's more-info dialog over **HTTPS**, allow microphone access, and use the microphone control.
+
+## Speaker playback
+
+Use the **Speaker** media player to play audio from Home Assistant's media browser, `media_player.play_media`, or `tts.speak`. Playback requires a configured **Cloud Password** and FFmpeg; native WebRTC can stay disabled. Starting two-way talk stops speaker playback.
+
+```yaml
+action: media_player.play_media
+target:
+  entity_id: media_player.your_camera_speaker
+data:
+  media_content_id: media-source://media_source/local/sound.mp3
+  media_content_type: audio/mpeg
+```
 
 ## Sound Detection
 
@@ -230,20 +250,21 @@ After every step, test if camera works in HA, and after each step try checking T
 <details>
   <summary>Which stream to use?</summary>
 
-This integration exposes 4 different camera entities:
+Depending on the camera and configuration, the integration exposes:
 
 - HD Stream
 - SD Stream
 - HD Stream (Direct)
 - SD Stream (Direct)
 
-Direct streams use proprietary TP-Link streaming protocol. Non-direct ones use standard RTSP protocol.
+Direct streams use the proprietary TP-Link protocol; the other entities use RTSP. Live views use Home Assistant's normal playback by default. Native WebRTC is available as an experimental opt-in. For custom cards, see the [dashboard examples](examples/EXAMPLES_LOVELACE.md).
 
 ### Why use the Direct streams?
 
 1. If you have a device which does not have RTSP functionality, it is the only way. This includes battery devices, solar devices, as well as devices working through a hub.
 2. If you have used up [all your RTSP streams](https://www.tp-link.com/cz/support/faq/2742/) and/or your RTSP streams are unstable in Home Assistant.
-3. Direct streams are _extremely_ fast to load and have less than a half a second delay in stream* (_*make sure to DISABLE `Use Stream from Home Assistant (restart required)` in integration options for the fastest experience_). Under the hood, the new streams are a binary stream of data "straight to your browser", with no unnecessary translations or overhead.
+
+If both work, choose the source that is more stable for your camera.
 
 ### Configuring Direct stream parameters
 
@@ -257,17 +278,9 @@ For example, to try the settings reported for the C560WS in [PR #1279](https://g
 -vsync: null
 ```
 
-These settings have not been verified across all cameras. To try only removing `-vsync`, enter just `-vsync: null`. Set the mapping to `{}` to restore the original behavior: probe size 32 bytes, analysis duration 0 microseconds, and `-vsync 0` for direct MJPEG and snapshots (no `-vsync` for Home Assistant stream playback).
+To try only removing `-vsync`, enter just `-vsync: null`. Set the mapping to `{}` to restore defaults: probe size 32 bytes, analysis duration 0 microseconds, and `-vsync 0` for direct MJPEG and snapshots (`-vsync` is omitted by default for WebRTC and HLS).
 
-Supported keys are `-loglevel`, `-probesize`, `-analyzeduration`, `-frames:v`, `-map-video`, `-vsync`, `-c:v`, and `-f`, matching the video arguments supported by pytapo. Values must be non-empty strings or numbers; only `-vsync` accepts `null`, which omits that flag. Codec, format, frame count, and video mapping overrides also affect snapshots, so changing them can prevent playback or image capture. RTSP streams use the existing **Extra arguments for ffmpeg** option instead.
-
-### Why not use the Direct streams?
-
-If you have an option to use RTSP, it is recommended to stick with RTSP streams.
-
-1. Direct streams take a bit more CPU resources since the device running this integration is now handling the binary stream directly, instead of camera exposing a standardized RTSP stream.
-2. Direct streams cannot be used with webrtc card, or go2rtc.
-3. RTSP streams are very fast with almost no delay using the [webrtc](https://github.com/AlexxIT/WebRTC) Home Assistant camera card
+Supported keys are `-loglevel`, `-probesize`, `-analyzeduration`, `-frames:v`, `-map-video`, `-vsync`, `-c:v`, and `-f`, matching the video arguments supported by pytapo. Values must be non-empty strings or numbers; only `-vsync` accepts `null`, which omits that flag. Codec, format, frame count, and video mapping overrides also affect snapshots, so changing them can prevent playback or image capture. For RTSP entities, **Extra arguments for ffmpeg** applies to snapshots and MJPEG, not native WebRTC.
 
 </details>
 <details>
@@ -304,49 +317,32 @@ Also make sure that:
 </details>
 
 <details>
-  <summary>Big delay in camera stream</summary>
+  <summary>Delay or freezes in the live view</summary>
 
-This is a [known issue](https://community.home-assistant.io/t/i-tried-all-the-camera-platforms-so-you-dont-have-to/222999) of Home Assistant.
+First check that the dashboard card is showing live video rather than refreshing snapshots. For built-in picture cards, set [`camera_view: live`](https://www.home-assistant.io/dashboards/picture-entity/):
 
-There is an ability to disable usage of Home Assistant Stream component for the camera, which might lower the delay very significantly at cost of higher CPU usage.
-
-You can choose to disable stream component when adding the camera, or via Options when camera has already been added. This change requires a restart of Home Assistant.
-
-There might be some disadvantages to doing this, like losing option to control playback and a higher CPU usage.
-Results depend on your hardware and future Home Assistant updates.
-
-If you disable stream and your hardware is not up to the task, you will get artifacts, bigger delay and freezes.
-
-If you wish, try it out and see what works best for you.
-
-**Another possibility is using [WebRTC Camera by AlexxIT](https://github.com/AlexxIT/WebRTC).**
-
-Example working configuration:
-
+```yaml
+type: picture-entity
+entity: camera.bedroom_sd
+camera_view: live
+tap_action:
+  action: more-info
 ```
-type: custom:webrtc-camera
-entity: camera.bedroom_hd
-```
+
+With the experimental native WebRTC option enabled, viewers of the same stream share one camera connection and decoder. Video is still encoded for each viewer on the Home Assistant host. Higher resolutions and more simultaneous live views increase CPU use. Try SD, close unused live views (especially on battery cameras), and check Home Assistant CPU usage and the camera's network connection.
+
+Delay depends on the camera, network and available processing power.
 
 </details>
 
 <details>
   <summary>No audio in camera stream</summary>
 
-Supported audio codecs in Home Assistant are "aac", "ac3" and "mp3".
+The optional native WebRTC player supports camera audio for both RTSP and Direct entities. Unmute the player and check the camera's **Microphone Mute** and **Microphone Volume** settings.
 
-Tapo Cameras use PCM ALAW (alaw) which is not supported.
+**RTSP recordings made with `camera.record` have no audio when the camera uses A-law**, which Home Assistant's stream recorder does not support. This also affects RTSP HLS playback; native WebRTC live views support sound.
 
-[More details here.](https://github.com/JurajNyiri/HomeAssistant-Tapo-Control/issues/58#issuecomment-762787442)
-
-**You can get sound working using [WebRTC Camera by AlexxIT](https://github.com/AlexxIT/WebRTC).**
-
-Example working configuration:
-
-```
-type: custom:webrtc-camera
-entity: camera.bedroom_hd
-```
+Use a **Direct** camera entity to record with audio. Direct streams convert camera audio to AAC for Home Assistant recordings and HLS playback. MJPEG has no audio.
 
 </details>
 

@@ -57,7 +57,6 @@
           "enable_motion_sensor": "Enable motion sensor",
           "enable_webhooks": "Enable webhooks",
           "enable_time_sync": "Automatically synchronise time",
-          "enable_stream": "Use Stream from Home Assistant (restart required)",
           "enable_sound_detection": "Enable sound threshold detection (restart required)",
           "sound_detection_peak": "[Sound Detection] Peak in dB. 0 is very loud and -100 is low.",
           "sound_detection_duration": "[Sound Detection] How long the noise needs to be over the peak to trigger the state.",
@@ -67,9 +66,13 @@
           "custom_stream_sd": "Custom stream link (SD)",
           "custom_stream6": "Custom stream link (Telephoto HD)",
           "custom_stream7": "Custom stream link (Telephoto SD)",
-          "rtsp_transport": "RTSP transport mechanism"
+          "rtsp_transport": "RTSP transport mechanism",
+          "native_webrtc": "Native WebRTC and two-way audio (experimental)"
         },
-        "description": "Almost there!\nJust some final options..."
+        "description": "Almost there!\nJust some final options...",
+        "data_description": {
+          "native_webrtc": "Uses the integration's live player and enables talk on supported cameras. May increase CPU use."
+        }
       }
     },
     "error": {
@@ -192,7 +195,6 @@
           "password": "Password",
           "enable_motion_sensor": "Enable motion sensor",
           "enable_webhooks": "Enable webhooks",
-          "enable_stream": "Use Stream from Home Assistant (restart required)",
           "show_on_map": "Show camera on map",
           "cloud_password": "Cloud Password (Optional)",
           "extra_arguments": "Extra arguments for ffmpeg (restart required)",
@@ -201,11 +203,13 @@
           "custom_stream6": "Custom stream link (Telephoto HD)",
           "custom_stream7": "Custom stream link (Telephoto SD)",
           "rtsp_transport": "RTSP transport mechanism",
-          "direct_stream_arguments": "Direct stream FFmpeg parameters"
+          "direct_stream_arguments": "Direct stream FFmpeg parameters",
+          "native_webrtc": "Native WebRTC and two-way audio (experimental)"
         },
-        "description": "Modify settings of your Tapo Camera.\n\nUse stream from Home Assistant:\nYes - Longer playback delay, lower CPU usage, allows playback control\nNo - Very short playback delay, higher CPU usage, no playback control",
+        "description": "Modify settings of your Tapo Camera.",
         "data_description": {
-          "direct_stream_arguments": "Advanced overrides for direct streams and snapshots. An empty mapping restores defaults. Set -vsync to null to omit it. Supported: -loglevel, -probesize, -analyzeduration, -frames:v, -map-video, -vsync, -c:v, -f. Applies when a new stream starts; reload the integration to stop existing streams. Native camera snapshots are unaffected."
+          "direct_stream_arguments": "Advanced overrides for direct streams and snapshots. An empty mapping restores defaults. Set -vsync to null to omit it. Supported: -loglevel, -probesize, -analyzeduration, -frames:v, -map-video, -vsync, -c:v, -f. Applies when a new stream starts; reload the integration to stop existing streams. Native camera snapshots are unaffected.",
+          "native_webrtc": "Uses the integration's live player and enables talk on supported cameras. May increase CPU use."
         }
       }
     },
@@ -289,6 +293,9 @@
     "media_player": {
       "music_player": {
         "name": "Music player"
+      },
+      "speaker": {
+        "name": "Speaker"
       }
     }
   },

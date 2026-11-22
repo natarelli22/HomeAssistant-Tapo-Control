@@ -1,5 +1,10 @@
 ## O que mudou nesta versão
 
+* **Sincronização com o Upstream `v7.3.0` → `v7.3.6` (`utils.py`, `__init__.py`, `camera.py`, `media_player.py`, `binary_sensor.py`, `config_flow.py`, `select.py`, `const.py`, `manifest.json`):**
+  * **Performance de I/O e Event Loop (`PR #1504`, `PR #1505`):** Substituído `Path.resolve()` síncrono em `getColdFile()`/`getHotFile()` por `isPathInside()` lexical + `checkInsideStorage()` no executor; adicionada listagem única `listColdFiles()` (adaptada para varrer subpastas `events/` e `continuous/`), `copyColdFile()` e `await asyncio.sleep(0)` por gravação no loop de sync.
+  * **Alto-falante e TTS (`TapoSpeaker`, `v7.3.6`, `pytapo==3.4.38`):** Adicionada entidade `media_player` (`Speaker`) para reproduzir TTS e áudios diretamente no alto-falante de câmeras compatíveis com `Cloud Password`.
+  * **WebRTC Nativo Opcional (`CONF_NATIVE_WEBRTC`):** Adicionada opção *opt-in* (desligada por padrão) para streaming WebRTC nativo e áudio bidirecional via `aiortc==1.16.0`, além de áudio habilitado para `camera.record` em entidades diretas (`#1486`).
+  * **Estabilidade (`PR #1497`, `v7.3.3`):** Encerramento garantido do processo `ffmpeg` no sensor de ruído (`TapoNoiseBinarySensor`) e correção de `TypeError` em `TapoDualCamLinkage`.
 * **Sincronização com o Upstream `v7.2.15` + PRs `#1498` e `#1487` (`utils.py`, `switch.py`, `const.py`, `manifest.json`):**
   * **Hardening de storage e thumbnails (`pytapo==3.4.32`):** Adicionada validação estrita de `device_id` (`validateDeviceID`), proteção contra *path traversal* em `getColdFile()`/`getHotFile()`, e gravação atômica com arquivo temporário único em `saveThumbnail()`/`generateThumb()` preservando a vinculação automática de thumbnails do Pre-roll Sync.
   * **Scans sequenciais para Hub e preload por dia (`utils.py`):** Substituído `thumbnailPreloadStopped` global por `thumbnailPreloadStoppedDays` por data e adicionado `mediaScanLock` em `scanMedia()` para serializar scans em câmeras filhas de Hub.

@@ -721,6 +721,84 @@ async def _preloadRecordingThumbnails(hass, entryData, entry_id, recordingsByDat
             )
 
 
+def checkInsideStorage(path, storageDirPath):
+    """Raise if path, symlinks followed, leaves the storage directory (executor).
+
+    The lexical isPathInside() check runs on the event loop for every
+    recording; this one looks at the file system and belongs in the executor.
+    """
+    storage = os.path.realpath(storageDirPath)
+    real = os.path.realpath(path)
+    if os.path.commonpath([storage, real]) != storage:
+        raise ValueError("Media path escapes storage: " + path)
+
+
+def prepareColdDir(coldDirPath, folder):
+    """Create videos/ or thumbs/ and check where it really points (executor)."""
+    path = os.path.join(coldDirPath, folder)
+    # Creating it also refreshes a stale listing of a network share.
+    os.makedirs(path, 0o777, exist_ok=True)
+    checkInsideStorage(path, coldDirPath)
+    return path
+
+
+def listColdFiles(coldDirPath):
+    """Return the file names in videos/ and thumbs/ (including subfolders) of cold storage (executor).
+
+    Symlinked files are left out, so they count as missing.
+    """
+    files = {}
+    for folder in ("videos", "thumbs"):
+        base_path = prepareColdDir(coldDirPath, folder)
+        found = set()
+        scan_dirs = [base_path]
+        for sub in (SUBDIR_EVENTS, SUBDIR_CONTINUOUS):
+            sub_path = os.path.join(base_path, sub)
+            if os.path.isdir(sub_path) and not os.path.islink(sub_path):
+                scan_dirs.append(sub_path)
+        for scan_dir in scan_dirs:
+            with os.scandir(scan_dir) as entries:
+                for entry in entries:
+                    if (
+                        not entry.is_symlink()
+                        and entry.is_file()
+                        and not entry.name.endswith((".tmp", ".corrupt"))
+                    ):
+                        found.add(entry.name)
+        files[folder] = found
+    return files
+
+
+def coldFileOnDisk(filePath):
+    """Whether a cold storage file exists as a real file inside it (executor)."""
+    if os.path.islink(filePath):
+        return False
+    if not os.path.exists(filePath):
+        return False
+    # filePath is <cold storage>/<folder>/<file>
+    checkInsideStorage(filePath, os.path.dirname(os.path.dirname(filePath)))
+    return True
+
+
+def copyColdFile(coldFilePath, hotFilePath, coldDirPath):
+    """Copy a cold storage file without following a symlink to it (executor)."""
+    checkInsideStorage(os.path.dirname(coldFilePath), coldDirPath)
+    try:
+        source = os.open(coldFilePath, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as err:
+        if os.path.islink(coldFilePath):
+            raise ValueError("Media file is a symlink: " + coldFilePath) from err
+        raise
+    with os.fdopen(source, "rb") as src, open(hotFilePath, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+
+
+async def getColdFiles(hass, entry_id):
+    """List cold storage once per run instead of checking every recording."""
+    coldDirPath = getColdDirPathForEntry(hass, entry_id)
+    return await hass.async_add_executor_job(listColdFiles, coldDirPath)
+
+
 async def findMedia(hass, entryData, entry, recordingsList=None):
     entry_id = entry.entry_id
     LOGGER.debug("Finding media for " + entryData["name"] + "...")
@@ -737,6 +815,7 @@ async def findMedia(hass, entryData, entry, recordingsList=None):
             recordingsList = await hass.async_add_executor_job(
                 tapoController.getRecordingsList
             )
+        coldFiles = await getColdFiles(hass, entry_id)
         mediaScanResult = {}
         recordingsByDate = {}
         recordingsWithVideo = []
@@ -799,7 +878,7 @@ async def findMedia(hass, entryData, entry, recordingsList=None):
                             + "-"
                             + str(endTime)
                         ] = True
-                        if os.path.exists(filePathVideo):
+                        if os.path.basename(filePathVideo) in coldFiles["videos"]:
                             synced_stem = os.path.splitext(os.path.basename(filePathVideo))[0]
                             mediaScanResult[synced_stem] = True
                             recordingsWithVideo.append(
@@ -824,6 +903,7 @@ async def findMedia(hass, entryData, entry, recordingsList=None):
                 recording["startTime"],
                 recording["endTime"],
                 subfolder=recording.get("subfolder"),
+                coldFiles=coldFiles,
             )
         if failedDays:
             # Keep what was found, but do not mark the scan as done: cleanup
@@ -966,6 +1046,21 @@ def sync_preroll_thumbnails(hass: HomeAssistant, entry_id: str):
         LOGGER.debug("Error in sync_preroll_thumbnails: %s", err)
 
 
+async def coldFileExists(hass, filePath, coldFiles, folder):
+    """Check a cold storage file against a listing, or the share if not listed.
+
+    A file missing from the listing may have been written since, so it is
+    looked up in the executor before it counts as missing.
+    """
+    if coldFiles is not None and os.path.basename(filePath) in coldFiles[folder]:
+        return True
+    if not await hass.async_add_executor_job(coldFileOnDisk, filePath):
+        return False
+    if coldFiles is not None:
+        coldFiles[folder].add(os.path.basename(filePath))
+    return True
+
+
 async def processDownload(
     hass,
     entry_id: int,
@@ -973,6 +1068,7 @@ async def processDownload(
     startDate: int,
     endDate: int,
     subfolder: str | None = None,
+    coldFiles: dict | None = None,
 ):
     childID = ""
     if entryData["isChild"]:
@@ -989,7 +1085,7 @@ async def processDownload(
         subfolder=subfolder,
     )
 
-    if not os.path.exists(coldFilePath):
+    if not await coldFileExists(hass, coldFilePath, coldFiles, "videos"):
         raise Unresolvable("Failed to get file from cold storage: " + coldFilePath)
 
     entry = hass.config_entries.async_get_entry(entry_id) if hass else None
@@ -1039,6 +1135,9 @@ async def processDownload(
                 dirname = os.path.dirname(coldFilePath)
                 new_coldFilePath = os.path.join(dirname, f"{new_filePath}.mp4")
                 os.rename(coldFilePath, new_coldFilePath)
+                if coldFiles is not None:
+                    coldFiles["videos"].discard(os.path.basename(coldFilePath))
+                    coldFiles["videos"].add(os.path.basename(new_coldFilePath))
                 coldFilePath = new_coldFilePath
                 actual_startDate = true_start_ts
                 actual_filePath = new_filePath
@@ -1067,6 +1166,9 @@ async def processDownload(
                             os.replace(old_thumb_path, new_thumb_path)
                         except OSError:
                             shutil.move(old_thumb_path, new_thumb_path)
+                        if coldFiles is not None:
+                            coldFiles["thumbs"].discard(os.path.basename(old_thumb_path))
+                            coldFiles["thumbs"].add(os.path.basename(new_thumb_path))
                         LOGGER.debug(
                             "[Pre-roll Sync - %s] Renamed thumbnail %s -> %s",
                             entryData.get("name", entry_id),
@@ -1112,7 +1214,13 @@ async def processDownload(
             entryData["mediaScanResult"][scan_name] = True
 
     await generateThumb(
-        hass, entry_id, actual_startDate, endDate, childID=childID, subfolder=subfolder
+        hass,
+        entry_id,
+        actual_startDate,
+        endDate,
+        childID=childID,
+        subfolder=subfolder,
+        coldFiles=coldFiles,
     )
 
 
@@ -1123,6 +1231,7 @@ async def generateThumb(
     endDate: int,
     childID="",
     subfolder: str | None = None,
+    coldFiles=None,
 ):
     filePathThumb = getColdFile(
         hass,
@@ -1133,7 +1242,7 @@ async def generateThumb(
         childID=childID,
         subfolder=subfolder,
     )
-    if not os.path.exists(filePathThumb):
+    if not await coldFileExists(hass, filePathThumb, coldFiles, "thumbs"):
         filePathVideo = getColdFile(
             hass,
             entry_id,
@@ -1152,7 +1261,38 @@ async def generateThumb(
             )
         )
         await hass.async_add_executor_job(saveThumbnail, filePathThumb, image)
+        if coldFiles is not None:
+            coldFiles["thumbs"].add(os.path.basename(filePathThumb))
     return filePathThumb
+
+
+def listDirIfExists(dirPath):
+    """Names in dirPath, or none if it does not exist (executor)."""
+    try:
+        return os.listdir(dirPath)
+    except FileNotFoundError:
+        return []
+
+
+def listDirWithMtime(dirPath, extension):
+    """(name, modification time) of the files with extension in dirPath (executor)."""
+    files = []
+    for f in listDirIfExists(dirPath):
+        if f.endswith(extension):
+            try:
+                files.append((f, os.stat(os.path.join(dirPath, f)).st_mtime))
+            except FileNotFoundError:
+                continue
+    return files
+
+
+def removeFiles(filePaths):
+    """Remove files, ignoring ones already gone (executor)."""
+    for filePath in filePaths:
+        try:
+            os.remove(filePath)
+        except FileNotFoundError:
+            continue
 
 
 # todo: findMedia needs to run periodically because of this function!!!
@@ -1599,8 +1739,16 @@ def cleanupTemporaryThumbnails(coldDirPath, hotDirPath, preload):
     now = time.time()
     expired = []
     expiredHashes = set()
+    # One listing instead of a check per thumbnail; this runs every minute
+    # and the videos can be on a network share
+    try:
+        videos = set(os.listdir(cold / "videos"))
+    except FileNotFoundError:
+        videos = set()
     for thumbnail in (cold / "thumbs").glob("*.jpg"):
-        if (cold / "videos" / (thumbnail.stem + ".mp4")).exists():
+        video = thumbnail.stem + ".mp4"
+        # A video missing from the listing may have been written since
+        if video in videos or (cold / "videos" / video).exists():
             continue
         try:
             if preload and now - thumbnail.stat().st_mtime < THUMBNAIL_CACHE_SECONDS:
@@ -1896,10 +2044,9 @@ async def mediaCleanup(hass, entry, deviceData):
 
 async def deleteDir(hass, dirPath):
     if (
-        os.path.exists(dirPath)
-        and os.path.isdir(dirPath)
-        and dirPath != "/"
+        dirPath != "/"
         and "tapo_control/" in dirPath
+        and await hass.async_add_executor_job(os.path.isdir, dirPath)
     ):
         LOGGER.debug("Deleting folder " + dirPath + "...")
         await hass.async_add_executor_job(shutil.rmtree, dirPath)
@@ -2064,6 +2211,19 @@ def processDownloadStatus(
     return processUpdate
 
 
+def isPathInside(path, directory):
+    """Whether path stays inside directory, decided on the text of the paths alone.
+
+    Media sync calls this for every recording on the event loop. Path.resolve()
+    looks up every component on the file system (twice per call), which on a
+    network share blocked the loop for seconds. This catches "..", absolute
+    or otherwise escaping names; symlinks are checked in the executor where
+    the folders are listed and the files are used (checkInsideStorage).
+    """
+    directory = os.path.normpath(directory)
+    return os.path.commonpath([directory, os.path.normpath(path)]) == directory
+
+
 def getFileName(startDate: int, endDate: int, encrypted=False, childID=""):
     if childID != "":
         validateDeviceID(childID)
@@ -2195,9 +2355,7 @@ def getColdFile(
         return root_path
 
     coldFilePath = _resolve_cold_path()
-    if not pathlib.Path(coldFilePath).resolve().is_relative_to(
-        pathlib.Path(coldDirPath).resolve()
-    ):
+    if not isPathInside(coldFilePath, coldDirPath):
         raise ValueError("Media path escapes cold storage")
     return coldFilePath
 
@@ -2331,15 +2489,18 @@ async def getHotFile(
     extension = pathlib.Path(coldFilePath).suffix
     fileNameEncrypted = getFileName(startDate, endDate, True, childID=childID)
     hotFilePath = f"{hotDirPath}/{folder}/{fileNameEncrypted}{UUID}{extension}"
-    if not pathlib.Path(hotFilePath).resolve().is_relative_to(
-        pathlib.Path(hotDirPath).resolve()
-    ):
+    if not isPathInside(hotFilePath, hotDirPath):
         raise ValueError("Media path escapes hot storage")
 
-    if not os.path.exists(hotFilePath):
-        if not os.path.exists(coldFilePath):
+    if not await hass.async_add_executor_job(os.path.exists, hotFilePath):
+        if not await hass.async_add_executor_job(coldFileOnDisk, coldFilePath):
             raise Unresolvable("Failed to get file from cold storage: " + coldFilePath)
-        await hass.async_add_executor_job(shutil.copyfile, coldFilePath, hotFilePath)
+        await hass.async_add_executor_job(
+            copyColdFile,
+            coldFilePath,
+            hotFilePath,
+            getColdDirPathForEntry(hass, entry_id),
+        )
     return hotFilePath
 
 
@@ -2375,6 +2536,7 @@ async def getRecording(
     progress_callback: Optional[
         Callable[[str, Optional[float], Optional[float]], None]
     ] = None,
+    coldFiles: dict | None = None,
 ) -> str:
     startDate = int(startDate)
     endDate = int(endDate)
@@ -2386,6 +2548,12 @@ async def getRecording(
     coldDirPath = getColdDirPathForEntry(hass, entry_id)
     downloadUID = getFileName(startDate, endDate, False, childID=childID)
 
+    if coldFiles is None:
+        #If the cold path is on an smb share or something similar, the videos folder gets cached but can break if something on the nas changes (folder removal or network hiccups)
+        #Therefore simply create the folder unconditionally and fail fast if it already exists. This also helps in recaching the files in the folder.
+        #With coldFiles, listColdFiles did this once for the whole run.
+        await hass.async_add_executor_job(prepareColdDir, coldDirPath, "videos")
+
     coldFilePath = getColdFile(
         hass,
         entry_id,
@@ -2396,7 +2564,7 @@ async def getRecording(
         subfolder=subfolder,
     )
     clip_key = f"{startDate}_{endDate}"
-    if os.path.exists(coldFilePath + ".corrupt") or clip_key in entryData.get("corruptClips", set()):
+    if clip_key in entryData.get("corruptClips", set()) or os.path.exists(coldFilePath + ".corrupt"):
         LOGGER.debug(
             "[Media Sync - %s] Skipping corrupt recording %s (%s to %s)",
             entry_id,
@@ -2409,7 +2577,8 @@ async def getRecording(
     entry = hass.config_entries.async_get_entry(entry_id) if hass else None
     entry_data_dict = entry.data if entry else {}
 
-    if os.path.exists(coldFilePath):
+    video_exists = await coldFileExists(hass, coldFilePath, coldFiles, "videos")
+    if video_exists:
         cur_stem = os.path.splitext(os.path.basename(coldFilePath))[0]
         actual_start, _ = _resolve_synced_stem_start(
             cur_stem, downloadUID, startDate, endDate, childID=childID
@@ -2450,15 +2619,10 @@ async def getRecording(
                 childID=childID,
                 subfolder=subfolder,
             )
-            if os.path.exists(thumb_path):
+            if await coldFileExists(hass, thumb_path, coldFiles, "thumbs"):
                 return coldFilePath
 
-    if not os.path.exists(coldFilePath):
-        #If the cold path is on an smb share or something similar, the videos folder gets cached but can break if something on the nas changes (folder removal or network hiccups)
-        #Therefore simply create the folder unconditionally and fail fast if it already exists. This also helps in recaching the files in the folder.
-        await hass.async_add_executor_job(
-            pathlib.Path(coldDirPath + "/videos").mkdir, 0o777, True, True
-        )
+    if not video_exists:
         selected_download_method = entry_data_dict.get(
             SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
         )
@@ -2530,7 +2694,6 @@ async def getRecording(
                     hass.loop.call_soon_threadsafe(notify_sync_sensor_delay)
 
                 return None
-
         # this NEEDS to happen otherwise camera does not send data!
         allRecordings = await hass.async_add_executor_job(tapo.getRecordings, date)
         all_recordings_count = (
@@ -2794,8 +2957,30 @@ async def getRecording(
     if not os.path.exists(coldFilePath):
         return None
 
+    if coldFiles is not None:
+        coldFiles["videos"].add(os.path.basename(coldFilePath))
+        coldFiles["thumbs"].discard(
+            os.path.basename(
+                getColdFile(
+                    hass,
+                    entry_id,
+                    startDate,
+                    endDate,
+                    "thumbs",
+                    childID=childID,
+                    subfolder=subfolder,
+                )
+            )
+        )
+
     await processDownload(
-        hass, entry_id, entryData, startDate, endDate, subfolder=subfolder
+        hass,
+        entry_id,
+        entryData,
+        startDate,
+        endDate,
+        subfolder=subfolder,
+        coldFiles=coldFiles,
     )
 
     return coldFilePath

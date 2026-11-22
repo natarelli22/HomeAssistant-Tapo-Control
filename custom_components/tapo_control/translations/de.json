@@ -26,7 +26,6 @@
         "data": {
           "enable_motion_sensor": "Bewegungssensor aktivieren",
           "enable_time_sync": "Zeit automatisch synchronisieren",
-          "enable_stream": "Kamera Stream in Home Assistant nutzen (Neustart notwendig)",
           "enable_sound_detection": "Geräuschsensor aktivieren (Neustart notwendig)",
           "sound_detection_peak": "[Geräuschsensor] Schwellenwert in dB (0 ist laut, -100 ist leise).",
           "sound_detection_duration": "[Geräuschsensor] Zeitintervall über dem Schwellenwert, nach dem der Sensor ausgelöst wird.",
@@ -36,9 +35,13 @@
           "custom_stream_sd": "Benutzerdefinierter Stream-Link (SD)",
           "custom_stream6": "Benutzerdefinierter Stream-Link (Teleobjektiv HD)",
           "custom_stream7": "Benutzerdefinierter Stream-Link (Teleobjektiv SD)",
-          "rtsp_transport": "RTSP-Transportmechanismus"
+          "rtsp_transport": "RTSP-Transportmechanismus",
+          "native_webrtc": "Natives WebRTC und Zwei-Wege-Audio (experimentell)"
         },
-        "description": "Fast geschafft!\nNur noch ein paar letzte Einstellungen..."
+        "description": "Fast geschafft!\nNur noch ein paar letzte Einstellungen...",
+        "data_description": {
+          "native_webrtc": "Verwendet den Live-Player der Integration und ermöglicht Sprechen auf unterstützten Kameras. Kann die CPU-Auslastung erhöhen."
+        }
       }
     },
     "error": {
@@ -71,7 +74,6 @@
           "username": "Benutzername",
           "password": "Passwort",
           "enable_motion_sensor": "Bewegungssensor aktivieren",
-          "enable_stream": "Kamera Stream in Home Assistant nutzen (Neustart notwendig)",
           "show_on_map": "Kamera auf der Karte anzeigen",
           "enable_sound_detection": "Geräuschsensor aktivieren (Neustart notwendig)",
           "cloud_password": "Tapo Cloud Passwort (optional)",
@@ -84,11 +86,13 @@
           "custom_stream6": "Benutzerdefinierter Stream-Link (Teleobjektiv HD)",
           "custom_stream7": "Benutzerdefinierter Stream-Link (Teleobjektiv SD)",
           "rtsp_transport": "RTSP-Transportmechanismus",
-          "direct_stream_arguments": "FFmpeg-Parameter für direkte Streams"
+          "direct_stream_arguments": "FFmpeg-Parameter für direkte Streams",
+          "native_webrtc": "Natives WebRTC und Zwei-Wege-Audio (experimentell)"
         },
-        "description": "Passe die Einstellungen deiner Tapo-Kamera an.\n\nVerwende den Stream von Home Assistant:\nJa - Längere Wiedergabeverzögerung, geringere CPU-Auslastung, ermöglicht Wiedergabesteuerung.\nNein - Sehr kurze Wiedergabeverzögerung, höhere CPU-Auslastung, keine Wiedergabesteuerung.",
+        "description": "Passe die Einstellungen deiner Tapo-Kamera an.",
         "data_description": {
-          "direct_stream_arguments": "Erweiterte Einstellungen für direkte Streams und Momentaufnahmen. Eine leere Zuordnung stellt die Standardwerte wieder her. -vsync: null lässt diesen Parameter weg. Unterstützt: -loglevel, -probesize, -analyzeduration, -frames:v, -map-video, -vsync, -c:v, -f. Gilt für neue Streams; Integration neu laden, um bestehende Streams zu beenden. Native Kamera-Momentaufnahmen bleiben davon unberührt."
+          "direct_stream_arguments": "Erweiterte Einstellungen für direkte Streams und Momentaufnahmen. Eine leere Zuordnung stellt die Standardwerte wieder her. -vsync: null lässt diesen Parameter weg. Unterstützt: -loglevel, -probesize, -analyzeduration, -frames:v, -map-video, -vsync, -c:v, -f. Gilt für neue Streams; Integration neu laden, um bestehende Streams zu beenden. Native Kamera-Momentaufnahmen bleiben davon unberührt.",
+          "native_webrtc": "Verwendet den Live-Player der Integration und ermöglicht Sprechen auf unterstützten Kameras. Kann die CPU-Auslastung erhöhen."
         }
       },
       "media": {
@@ -126,6 +130,9 @@
     "media_player": {
       "music_player": {
         "name": "Musikplayer"
+      },
+      "speaker": {
+        "name": "Lautsprecher"
       }
     }
   }

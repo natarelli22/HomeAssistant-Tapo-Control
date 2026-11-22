@@ -129,7 +129,7 @@ from pytapo.version import PYTAPO_VERSION
 
 from datetime import time as dt_time, timedelta
 
-from .utils import getRecording
+from .utils import getColdFiles, getRecording
 
 
 def _is_settled_past_day(date_str: str, now_ts: float) -> bool:
@@ -1533,10 +1533,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     await async_update_sync_sensors(hass, entry.entry_id, device)
                     tapoController: Tapo = device["controller"]
                     sync_log_prefix = f"[Media Sync - {device.get('name', entry.entry_id)}]"
-                    coldDirPath = getColdDirPathForEntry(hass, entry.entry_id)
-                    await hass.async_add_executor_job(
-                        pathlib.Path(coldDirPath + "/videos").mkdir, 0o777, True, True
-                    )
                     LOGGER.debug("getRecordingsList -1")
                     recordingsList = await _call_with_transient_retry(
                         lambda: hass.async_add_executor_job(
@@ -1545,6 +1541,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         sync_log_prefix,
                     )
                     LOGGER.debug("getRecordingsList -2")
+                    coldFiles = await getColdFiles(hass, entry.entry_id)
 
                     ts = time.time()
                     cam_ts = int(ts) - (timeCorrection if isinstance(timeCorrection, (int, float)) else 0)
@@ -1638,6 +1635,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                     ENABLE_MEDIA_SYNC
                                 ]
                                 if enableMediaSync:
+                                    # Recordings already in cold storage return without
+                                    # awaiting anything; yield so a day with many of them
+                                    # does not hold the event loop.
+                                    await asyncio.sleep(0)
                                     LOGGER.debug("getRecording -1")
                                     await getRecording(
                                         hass,
@@ -1655,6 +1656,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                         tot_count,
                                         subfolder=subf,
                                         item_type=item_type,
+                                        coldFiles=coldFiles,
                                     )
                                     LOGGER.debug("getRecording -2")
                                     device["lastMediaSyncActivity"] = time.time()
@@ -1713,6 +1715,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                                 ENABLE_MEDIA_SYNC
                                             ]
                                             if enableMediaSync:
+                                                await asyncio.sleep(0)
                                                 LOGGER.debug("getRecording -1")
                                                 await getRecording(
                                                     hass,
@@ -1729,6 +1732,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                                                     recordingCount,
                                                     totalRecordingsToDownload,
                                                     item_type="recording",
+                                                    coldFiles=coldFiles,
                                                 )
                                                 LOGGER.debug("getRecording -2")
                                                 device["lastMediaSyncActivity"] = time.time()
