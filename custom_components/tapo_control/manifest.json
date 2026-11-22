@@ -7,7 +7,7 @@
     "@JurajNyiri",
     "@natarelli22"
   ],
-  "version": "2026.11.221605",
+  "version": "2026.11.221613",
   "iot_class": "local_polling",
   "requirements": [
     "pytapo==3.4.38",
