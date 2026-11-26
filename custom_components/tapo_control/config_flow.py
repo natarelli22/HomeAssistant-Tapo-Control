@@ -2312,9 +2312,6 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     self.config_entry.data.get(CONF_USERNAME) != username
                     or self.config_entry.data.get(CONF_PASSWORD) != password
                 )
-                streamChanged = (
-                    self.config_entry.data.get(ENABLE_STREAM) != enable_stream
-                )
 
                 self.hass.config_entries.async_update_entry(
                     self.config_entry,
@@ -2336,11 +2333,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     or rtspEnablementChanged
                     or motionSensorChanged
                     or authChanged
-                    or streamChanged
                     or (live_view_mode != previous_live_view_mode)
                 ):
                     LOGGER.debug(
-                        "[%s] IP, Auth, Stream, live view mode or Motion Sensor Changed, reloading entry...",
+                        "[%s] IP, Auth, live view mode or Motion Sensor Changed, reloading entry...",
                         ip_address,
                     )
                     await self.hass.config_entries.async_reload(
