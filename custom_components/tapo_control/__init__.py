@@ -41,6 +41,9 @@ from .const import (
     CONF_CUSTOM_STREAM_SD,
     CONF_CUSTOM_STREAM_6,
     CONF_CUSTOM_STREAM_7,
+    CONF_LIVE_VIEW_MODE,
+    LIVE_VIEW_HOME_ASSISTANT,
+    LIVE_VIEW_NATIVE_WEBRTC,
     ENABLE_WEBHOOKS,
     IS_KLAP_DEVICE,
     LOGGER,
@@ -98,6 +101,7 @@ from .utils import (
     deleteDir,
     getColdDirPathForEntry,
     getConfiguredColdDirPath,
+    get_custom_stream_links,
     moveMediaStorage,
     cleanupThumbnailCache,
     getDataForController,
@@ -544,6 +548,15 @@ async def async_migrate_entry(hass, config_entry: ConfigEntry):
                 data=new,
                 version=25,
             )
+
+    if config_entry.version == 25:
+        new = {**config_entry.data}
+        native_webrtc = new.pop("native_webrtc", False)
+        new.setdefault(
+            CONF_LIVE_VIEW_MODE,
+            LIVE_VIEW_NATIVE_WEBRTC if native_webrtc else LIVE_VIEW_HOME_ASSISTANT,
+        )
+        hass.config_entries.async_update_entry(config_entry, data=new, version=26)
 
     LOGGER.info("Migration to version %s successful", config_entry.version)
 
@@ -1173,6 +1186,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         LOGGER.debug(f"Timezone offset is {timezoneOffset}.")
 
         LOGGER.debug("Setting up entry data.")
+        custom_stream_links = get_custom_stream_links(entry.data)
         hass.data[DOMAIN][entry.entry_id] = {
             "setup_retries": 0,
             "reauth_retries": 0,
@@ -1184,6 +1198,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             "chInfo": chInfo,
             "usingCloudPassword": cloud_password != "",
             "allControllers": [tapoController],
+            CONF_RTSP_TRANSPORT: entry.data.get(CONF_RTSP_TRANSPORT),
+            "custom_stream_links": custom_stream_links,
             "update_listener": entry.add_update_listener(update_listener),
             "coordinator": tapoCoordinator,
             "camData": camData,
@@ -1266,6 +1282,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                             childDevice["device_id"],
                             None,
                             hass,
+                            tapoController.transport,
                         )
                         LOGGER.debug("Child controller set up.")
                         hass.data[DOMAIN][entry.entry_id]["allControllers"].append(
@@ -1332,6 +1349,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                         )
                 else:
                     LOGGER.debug("No child devices found.")
+        if tapoController.isKLAP is False or any(custom_stream_links.values()):
             LOGGER.debug("Setting up camera entities.")
             await hass.async_create_task(
                 hass.config_entries.async_forward_entry_setups(entry, ["camera"])

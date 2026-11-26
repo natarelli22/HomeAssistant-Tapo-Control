@@ -1,5 +1,9 @@
 ## O que mudou nesta versão
 
+* **Sincronização com o Upstream `v7.3.7` → `v7.3.12` (`camera.py`, `go2rtc_playback.py`, `config_flow.py`, `const.py`, `__init__.py`, `utils.py`, `manifest.json`):**
+  * **Seletor `live_view_mode` e reuso de `go2rtc` (`v7.3.10`, `go2rtc_playback.py`):** Substitui o antigo toggle `native_webrtc` pelo seletor `CONF_LIVE_VIEW_MODE` (`home_assistant`, `native_webrtc`, `mjpeg` — com migração automática preservando `home_assistant` como padrão) e reaproveita streams existentes no `go2rtc` (`CONF_GO2RTC_API_URL`) para vídeo no modo WebRTC nativo.
+  * **RTSP Transport e reload automático (`#1298`, `v7.3.7`, `v7.3.9`):** Garante respeito ao protocolo RTSP configurado em todas as visualizações ao vivo e recarrega a entrada quando transporte ou links customizados forem alterados.
+  * **Proteção de threads e Hub compartilhado (`pytapo==3.4.42`, `v7.3.11`, `v7.3.12`):** Limita e cancela rapidamente operações em shares de rede mortos no `pytapo` e compartilha o transporte do Hub entre câmeras filhas (`PR #1527`).
 * **Sincronização com o Upstream `v7.3.0` → `v7.3.6` (`utils.py`, `__init__.py`, `camera.py`, `media_player.py`, `binary_sensor.py`, `config_flow.py`, `select.py`, `const.py`, `manifest.json`):**
   * **Performance de I/O e Event Loop (`PR #1504`, `PR #1505`):** Substituído `Path.resolve()` síncrono em `getColdFile()`/`getHotFile()` por `isPathInside()` lexical + `checkInsideStorage()` no executor; adicionada listagem única `listColdFiles()` (adaptada para varrer subpastas `events/` e `continuous/`), `copyColdFile()` e `await asyncio.sleep(0)` por gravação no loop de sync.
   * **Alto-falante e TTS (`TapoSpeaker`, `v7.3.6`, `pytapo==3.4.38`):** Adicionada entidade `media_player` (`Speaker`) para reproduzir TTS e áudios diretamente no alto-falante de câmeras compatíveis com `Cloud Password`.

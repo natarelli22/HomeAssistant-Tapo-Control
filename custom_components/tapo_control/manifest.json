@@ -7,10 +7,10 @@
     "@JurajNyiri",
     "@natarelli22"
   ],
-  "version": "2026.11.221613",
+  "version": "2026.11.260004",
   "iot_class": "local_polling",
   "requirements": [
-    "pytapo==3.4.38",
+    "pytapo==3.4.42",
     "python-kasa[speedups]>=0.10.2",
     "pycryptodome>=3.20.0"
   ],

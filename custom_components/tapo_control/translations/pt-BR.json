@@ -30,7 +30,8 @@
           "enable_sound_detection": "Ativar detecção de limite de som (requer reinicialização)",
           "sound_detection_peak": "[Detecção de som] Pico em dB. 0 é muito alto e -100 é baixo.",
           "sound_detection_duration": "[Detecção de som] Quanto tempo o ruído precisa estar acima do pico para acionar o estado.",
-          "sound_detection_reset": "[Detecção de som] O tempo para redefinir o estado depois que nenhum novo ruído ultrapassar o pico."
+          "sound_detection_reset": "[Detecção de som] O tempo para redefinir o estado depois que nenhum novo ruído ultrapassar o pico.",
+          "live_view_mode": "Modo de visualização ao vivo"
         },
         "description": "Quase lá!\nSó mais algumas opções..."
       }
@@ -73,7 +74,8 @@
           "sound_detection_duration": "[Detecção de som] Quanto tempo o ruído precisa estar acima do pico para acionar o estado.",
           "sound_detection_reset": "[Detecção de som] O tempo para redefinir o estado depois que nenhum novo ruído ultrapassar o pico.",
           "direct_stream_arguments": "Parâmetros FFmpeg dos fluxos diretos",
-          "native_webrtc": "WebRTC nativo e áudio bidirecional (experimental)"
+          "go2rtc_api_url": "URL da API go2rtc para reprodução WebRTC nativa",
+          "live_view_mode": "Modo de visualização ao vivo"
         },
         "description": "Modificar configurações da sua Tapo câmera.\n\nUsar stream do Home Assistant:\nSim - Maior delay de reprodução, menor uso de CPU, permite controle de reprodução\nNão - delay de reprodução muito curto, maior uso de CPU, sem controle de reprodução",
         "data_description": {
@@ -194,6 +196,13 @@
         "both": "Ambos (Eventos de Detecção primeiro, depois Contínua)",
         "events": "Apenas Eventos de Detecção (Movimento/Pessoas)",
         "continuous": "Apenas Gravação Contínua (24/7)"
+      }
+    },
+    "live_view_mode": {
+      "options": {
+        "home_assistant": "Home Assistant (automático)",
+        "native_webrtc": "WebRTC nativo (experimental)",
+        "mjpeg": "MJPEG (somente vídeo)"
       }
     }
   }
