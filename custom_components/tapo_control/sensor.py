@@ -30,9 +30,6 @@ from .const import (
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
-    SD_DOWNLOAD_METHOD,
-    SD_DOWNLOAD_METHOD_LEGACY,
-    SD_DOWNLOAD_METHOD_FAST,
     ENABLE_EVENT_PREROLL_SYNC,
     ENABLE_EVENT_PREROLL_SYNC_DEFAULT,
     SD_CHECK_GO2RTC_SESSION,
@@ -536,13 +533,10 @@ class TapoSyncSensor(TapoSensorEntity):
                         1, int((delayed_until_ts - now_ts) / 60)
                     )
 
-            download_method = self._config_entry.data.get(
-                SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
-            )
             fast_cleanup_time = self._config_entry.data.get(
                 FAST_CLEANUP_TIME, "04:00"
             )
-            if download_method == SD_DOWNLOAD_METHOD_FAST and fast_cleanup_time:
+            if fast_cleanup_time:
                 attributes["cleanup_time"] = fast_cleanup_time
                 try:
                     ch, cm = map(int, fast_cleanup_time.split(":"))

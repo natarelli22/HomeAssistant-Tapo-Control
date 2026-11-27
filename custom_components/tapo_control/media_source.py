@@ -66,9 +66,6 @@ from .const import (
     MEDIA_THUMBNAIL_PRELOAD,
     MEDIA_VIEW_DAYS_ORDER,
     MEDIA_VIEW_RECORDINGS_ORDER,
-    SD_DOWNLOAD_METHOD,
-    SD_DOWNLOAD_METHOD_LEGACY,
-    SD_DOWNLOAD_METHOD_FAST,
     SD_SYNC_RECORDING_TYPES,
     SD_SYNC_RECORDING_TYPES_BOTH,
     SD_SYNC_RECORDING_TYPES_EVENTS,
@@ -992,14 +989,17 @@ class TapoMediaSource(MediaSource):
 
         dates_map = self._get_camera_dates(camera_path) if camera_path else {}
 
-        # In Fast Download mode, ensure all SD card recording dates are displayed even before downloading (if enabled)
+        # Ensure all SD card recording dates are displayed even before downloading (if enabled)
         if entry_id and entry_id in self.hass.data.get(DOMAIN, {}):
             entry_data = self.hass.data[DOMAIN][entry_id]
             config_entry = entry_data.get("entry")
-            download_method = (
-                config_entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+            recordings_source = (
+                config_entry.data.get(
+                    RECORDINGS_SOURCE,
+                    config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+                )
                 if config_entry
-                else SD_DOWNLOAD_METHOD_LEGACY
+                else RECORDINGS_SOURCE_SD
             )
             show_online_content = (
                 config_entry.data.get(SD_SHOW_ONLINE_CONTENT, False)
@@ -1007,7 +1007,7 @@ class TapoMediaSource(MediaSource):
                 else False
             )
             if (
-                download_method == SD_DOWNLOAD_METHOD_FAST
+                recordings_source == RECORDINGS_SOURCE_SD
                 and show_online_content
                 and "controller" in entry_data
             ):
@@ -1099,16 +1099,19 @@ class TapoMediaSource(MediaSource):
 
         dates_map = self._get_camera_dates(camera_path) if camera_path else {}
 
-        download_method = (
-            config_entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+        recordings_source = (
+            config_entry.data.get(
+                RECORDINGS_SOURCE,
+                config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+            )
             if config_entry
-            else SD_DOWNLOAD_METHOD_LEGACY
+            else RECORDINGS_SOURCE_SD
         )
 
         # -------------------------------------------------------------
-        # FAST DOWNLOAD MODE: Segmented categories & Direct SD Browsing
+        # SD CARD MODE: Segmented categories & Direct SD Browsing
         # -------------------------------------------------------------
-        if download_method == SD_DOWNLOAD_METHOD_FAST:
+        if recordings_source == RECORDINGS_SOURCE_SD:
             sd_sync_type = (
                 config_entry.data.get(
                     SD_SYNC_RECORDING_TYPES, SD_SYNC_RECORDING_TYPES_BOTH
@@ -1498,13 +1501,16 @@ class TapoMediaSource(MediaSource):
             config_entry = (
                 self.hass.config_entries.async_get_entry(entry_id) if entry_id else None
             )
-            dl_method = (
-                config_entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
+            recordings_source = (
+                config_entry.data.get(
+                    RECORDINGS_SOURCE,
+                    config_entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
+                )
                 if config_entry
-                else SD_DOWNLOAD_METHOD_LEGACY
+                else RECORDINGS_SOURCE_SD
             )
 
-            if not subfolder and dl_method == SD_DOWNLOAD_METHOD_FAST and start_date and end_date:
+            if not subfolder and recordings_source == RECORDINGS_SOURCE_SD and start_date and end_date:
                 try:
                     duration = int(end_date) - int(start_date)
                     subfolder = SUBDIR_CONTINUOUS if duration >= 900 else SUBDIR_EVENTS
@@ -1512,7 +1518,7 @@ class TapoMediaSource(MediaSource):
                     subfolder = SUBDIR_EVENTS
 
             if (
-                dl_method == SD_DOWNLOAD_METHOD_FAST
+                recordings_source == RECORDINGS_SOURCE_SD
                 and start_date
                 and end_date
                 and entry_id in self.hass.data.get(DOMAIN, {})

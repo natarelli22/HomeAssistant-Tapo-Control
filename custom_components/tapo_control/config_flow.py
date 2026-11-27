@@ -59,9 +59,7 @@ from .const import (
     MEDIA_VIEW_RECORDINGS_ORDER,
     MEDIA_VIEW_RECORDINGS_ORDER_OPTIONS,
     SD_DOWNLOAD_METHOD,
-    SD_DOWNLOAD_METHOD_LEGACY,
     SD_DOWNLOAD_METHOD_FAST,
-    SD_DOWNLOAD_METHOD_OPTIONS,
     SD_SYNC_RECORDING_TYPES,
     SD_SYNC_RECORDING_TYPES_BOTH,
     SD_SYNC_RECORDING_TYPES_OPTIONS,
@@ -1601,9 +1599,6 @@ class TapoOptionsFlowHandler(OptionsFlow):
         enable_event_preroll_sync = self.config_entry.data.get(
             ENABLE_EVENT_PREROLL_SYNC, ENABLE_EVENT_PREROLL_SYNC_DEFAULT
         )
-        sd_download_method = self.config_entry.data.get(
-            SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
-        )
 
         if user_input is not None:
             # 1. Check if camera has an SD card inserted
@@ -1649,19 +1644,10 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     allConfigData[ENABLE_EVENT_PREROLL_SYNC] = bool(
                         user_input.get(ENABLE_EVENT_PREROLL_SYNC, enable_event_preroll_sync)
                     )
-                    allConfigData[SD_DOWNLOAD_METHOD] = user_input.get(
-                        SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
-                    )
+                    allConfigData[SD_DOWNLOAD_METHOD] = SD_DOWNLOAD_METHOD_FAST
 
-                    if user_input.get(SD_DOWNLOAD_METHOD) == SD_DOWNLOAD_METHOD_FAST:
-                        self._temp_media_sd_data = allConfigData
-                        return await self.async_step_media_sd_fast_options()
-
-                    self.hass.config_entries.async_update_entry(
-                        self.config_entry,
-                        data=allConfigData,
-                    )
-                    return self.async_create_entry(title="", data=None)
+                    self._temp_media_sd_data = allConfigData
+                    return await self.async_step_media_sd_fast_options()
                 except Exception as e:
                     errors["base"] = "unknown"
                     LOGGER.error(e)
@@ -1676,9 +1662,6 @@ class TapoOptionsFlowHandler(OptionsFlow):
             media_sync_hours = user_input.get(MEDIA_SYNC_HOURS, media_sync_hours)
             enable_event_preroll_sync = user_input.get(
                 ENABLE_EVENT_PREROLL_SYNC, enable_event_preroll_sync
-            )
-            sd_download_method = user_input.get(
-                SD_DOWNLOAD_METHOD, sd_download_method
             )
 
         return self.async_show_form(
@@ -1705,18 +1688,6 @@ class TapoOptionsFlowHandler(OptionsFlow):
                         ENABLE_EVENT_PREROLL_SYNC,
                         description={"suggested_value": enable_event_preroll_sync},
                     ): selector({"boolean": {}}),
-                    vol.Required(
-                        SD_DOWNLOAD_METHOD,
-                        description={"suggested_value": sd_download_method},
-                    ): selector(
-                        {
-                            "select": {
-                                "options": SD_DOWNLOAD_METHOD_OPTIONS,
-                                "mode": "dropdown",
-                                "translation_key": "sd_download_method",
-                            }
-                        }
-                    ),
                 }
             ),
             errors=errors,
@@ -1863,6 +1834,8 @@ class TapoOptionsFlowHandler(OptionsFlow):
         tapo_care_cleanup_time = self.config_entry.data.get(
             TAPO_CARE_CLEANUP_TIME, ""
         )
+        thumbnail_cache = self.config_entry.data.get(MEDIA_THUMBNAIL_CACHE, False)
+        thumbnail_preload = self.config_entry.data.get(MEDIA_THUMBNAIL_PRELOAD, True)
 
         if user_input is not None:
             submitted_cold_path = user_input.get(MEDIA_SYNC_COLD_STORAGE_PATH, "")
@@ -1914,6 +1887,12 @@ class TapoOptionsFlowHandler(OptionsFlow):
                     allConfigData[MEDIA_SYNC_HOURS] = user_input.get(MEDIA_SYNC_HOURS, "")
                     allConfigData[TAPO_CARE_CLEANUP_TIME] = formatted_cleanup_time
                     allConfigData[MEDIA_SYNC_COLD_STORAGE_PATH] = submitted_cold_path
+                    allConfigData[MEDIA_THUMBNAIL_CACHE] = user_input.get(
+                        MEDIA_THUMBNAIL_CACHE, thumbnail_cache
+                    )
+                    allConfigData[MEDIA_THUMBNAIL_PRELOAD] = user_input.get(
+                        MEDIA_THUMBNAIL_PRELOAD, thumbnail_preload
+                    )
 
                     self.hass.config_entries.async_update_entry(
                         self.config_entry,
@@ -1935,6 +1914,8 @@ class TapoOptionsFlowHandler(OptionsFlow):
             tapo_care_cleanup_time = user_input.get(
                 TAPO_CARE_CLEANUP_TIME, tapo_care_cleanup_time
             )
+            thumbnail_cache = user_input.get(MEDIA_THUMBNAIL_CACHE, thumbnail_cache)
+            thumbnail_preload = user_input.get(MEDIA_THUMBNAIL_PRELOAD, thumbnail_preload)
 
         return self.async_show_form(
             step_id="media_tapo_care",

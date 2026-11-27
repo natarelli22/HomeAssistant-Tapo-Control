@@ -1,11 +1,11 @@
 {
   "title": "Tapo: Controlo de Câmaras",
   "selector": {
-    "live_view_mode": {
+    "sd_sync_recording_types": {
       "options": {
-        "home_assistant": "Home Assistant (automático)",
-        "native_webrtc": "WebRTC nativo (experimental)",
-        "mjpeg": "MJPEG (apenas vídeo)"
+        "both": "Ambos (Eventos de Deteção primeiro, depois Contínua)",
+        "events": "Apenas Eventos de Deteção (Movimento/Pessoas)",
+        "continuous": "Apenas Gravação Contínua (24/7)"
       }
     }
   },
@@ -108,13 +108,11 @@
           "media_sync_hours": "Número de horas a manter sincronizadas",
           "media_sync_cold_storage_path": "Caminho do cold storage",
           "enable_event_preroll_sync": "Ativar sincronização de pré-gravação (pre-roll) de eventos",
-          "sd_download_method": "Método de download das gravações",
           "media_thumbnail_cache": "Guardar miniaturas em cache",
           "media_thumbnail_preload": "Pré-carregar miniaturas"
         },
         "data_description": {
           "enable_event_preroll_sync": "Deteta automaticamente o timestamp visual no primeiro quadro de eventos do cartão SD para eliminar a diferença de pré-gravação.",
-          "sd_download_method": "Fast descarrega gravações em alta velocidade usando a porta 8800 da câmara. Legado faz o download em velocidade normal via reprodução RTSP.",
           "media_thumbnail_cache": "Guardar miniaturas dos vídeos ainda não transferidos. Se desativado, estas miniaturas são eliminadas após cerca de 5 minutos.",
           "media_thumbnail_preload": "Obter miniaturas no arranque apenas se a cache também estiver ativa. Sem cache, obter apenas durante a navegação. Se o pré-carregamento estiver desativado, obter apenas durante a navegação se a cache estiver ativa. Desative ambas as opções para mostrar miniaturas apenas dos vídeos transferidos."
         },
@@ -193,21 +191,6 @@
       },
       "speaker": {
         "name": "Altifalante"
-      }
-    }
-  },
-  "selector": {
-    "sd_download_method": {
-      "options": {
-        "Fast (Download Protocol)": "Fast Download (Porta 8800 - Alta Velocidade)",
-        "Legacy (Playback)": "Legado (Stream RTSP - Velocidade Normal)"
-      }
-    },
-    "sd_sync_recording_types": {
-      "options": {
-        "both": "Ambos (Eventos de Deteção primeiro, depois Contínua)",
-        "events": "Apenas Eventos de Deteção (Movimento/Pessoas)",
-        "continuous": "Apenas Gravação Contínua (24/7)"
       }
     }
   }

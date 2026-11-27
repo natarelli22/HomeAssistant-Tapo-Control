@@ -76,9 +76,6 @@ from .const import (
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
-    SD_DOWNLOAD_METHOD,
-    SD_DOWNLOAD_METHOD_LEGACY,
-    SD_DOWNLOAD_METHOD_FAST,
     FAST_CLEANUP_TIME,
     SUBDIR_EVENTS,
     SUBDIR_CONTINUOUS,
@@ -932,10 +929,7 @@ async def findMedia(hass, entryData, entry, recordingsList=None):
             LOGGER.debug("Error running preroll thumbnail sync for %s: %s", entryData["name"], sync_err)
 
         fast_cleanup_time = entry.data.get(FAST_CLEANUP_TIME, "04:00")
-        entry_download_method = entry.data.get(
-            SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
-        )
-        if not (entry_download_method == SD_DOWNLOAD_METHOD_FAST and fast_cleanup_time):
+        if not fast_cleanup_time:
             if entryData.get(ENABLE_MEDIA_CLEANUP, False):
                 await mediaCleanup(hass, entry, entryData)
     except Exception as err:
@@ -1855,12 +1849,9 @@ async def mediaCleanup(hass, entry, deviceData):
         subdirs_to_check = set()
 
         show_online_content = entry.data.get(SD_SHOW_ONLINE_CONTENT, False)
-        entry_download_method = entry.data.get(
-            SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
-        )
 
         if sync_source == RECORDINGS_SOURCE_SD:
-            if entry_download_method == SD_DOWNLOAD_METHOD_FAST and not show_online_content:
+            if not show_online_content:
                 LOGGER.debug(
                     "[%s Cleanup - %s] SD sync deletion disabled: deleting files exclusively based on retention hours.",
                     sync_source,
@@ -2017,7 +2008,7 @@ async def mediaCleanup(hass, entry, deviceData):
 
         await hass.async_add_executor_job(_clean_subdirs)
 
-        if entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY) == SD_DOWNLOAD_METHOD_FAST:
+        if sync_source == RECORDINGS_SOURCE_SD:
             await hass.async_add_executor_job(reorganize_media_storage, hass, entry_id)
 
         # Delete everything other than HOT_DIR_DELETE_TIME seconds from hot storage
@@ -2289,60 +2280,7 @@ def getColdFile(
         return None
 
     def _resolve_cold_path() -> str:
-        entry = hass.config_entries.async_get_entry(entry_id) if hass else None
-        entry_data = entry.data if entry else {}
-        download_method = entry_data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
-
-        # In Fast mode, use subfolder structure
-        if download_method == SD_DOWNLOAD_METHOD_FAST:
-            if subfolder:
-                sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
-                if os.path.exists(sub_path):
-                    return sub_path
-                preroll_sub = _find_preroll_match(os.path.join(coldDirPath, folder, subfolder))
-                if preroll_sub:
-                    return preroll_sub
-                # Retrocompatibility: if file exists in root, return it
-                root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-                if os.path.exists(root_path):
-                    return root_path
-                preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
-                if preroll_root:
-                    return preroll_root
-                return sub_path
-
-            # If subfolder is not specified in Fast mode, first check existing files in subfolders
-            events_path = os.path.join(coldDirPath, folder, SUBDIR_EVENTS, f"{fileName}{extension}")
-            if os.path.exists(events_path):
-                return events_path
-            preroll_events = _find_preroll_match(os.path.join(coldDirPath, folder, SUBDIR_EVENTS))
-            if preroll_events:
-                return preroll_events
-            cont_path = os.path.join(coldDirPath, folder, SUBDIR_CONTINUOUS, f"{fileName}{extension}")
-            if os.path.exists(cont_path):
-                return cont_path
-            root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-            if os.path.exists(root_path):
-                return root_path
-            preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
-            if preroll_root:
-                return preroll_root
-
-            # If file does not exist yet, infer subfolder based on duration (>= 15 min is continuous)
-            try:
-                duration = int(endDate) - int(startDate)
-                inferred = SUBDIR_CONTINUOUS if duration >= 900 else SUBDIR_EVENTS
-            except Exception:
-                inferred = SUBDIR_EVENTS
-            return os.path.join(coldDirPath, folder, inferred, f"{fileName}{extension}")
-
-        # In Legacy mode (or without subfolder), use traditional root path
-        root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
-        if os.path.exists(root_path):
-            return root_path
-        preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
-        if preroll_root:
-            return preroll_root
+        # Use subfolder structure (events/ and continuous/) with read fallback to root
         if subfolder:
             sub_path = os.path.join(coldDirPath, folder, subfolder, f"{fileName}{extension}")
             if os.path.exists(sub_path):
@@ -2350,7 +2288,39 @@ def getColdFile(
             preroll_sub = _find_preroll_match(os.path.join(coldDirPath, folder, subfolder))
             if preroll_sub:
                 return preroll_sub
-        return root_path
+            # Retrocompatibility: if file exists in root, return it
+            root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+            if os.path.exists(root_path):
+                return root_path
+            preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
+            if preroll_root:
+                return preroll_root
+            return sub_path
+
+        # If subfolder is not specified, first check existing files in subfolders
+        events_path = os.path.join(coldDirPath, folder, SUBDIR_EVENTS, f"{fileName}{extension}")
+        if os.path.exists(events_path):
+            return events_path
+        preroll_events = _find_preroll_match(os.path.join(coldDirPath, folder, SUBDIR_EVENTS))
+        if preroll_events:
+            return preroll_events
+        cont_path = os.path.join(coldDirPath, folder, SUBDIR_CONTINUOUS, f"{fileName}{extension}")
+        if os.path.exists(cont_path):
+            return cont_path
+        root_path = os.path.join(coldDirPath, folder, f"{fileName}{extension}")
+        if os.path.exists(root_path):
+            return root_path
+        preroll_root = _find_preroll_match(os.path.join(coldDirPath, folder))
+        if preroll_root:
+            return preroll_root
+
+        # If file does not exist yet, infer subfolder based on duration (>= 15 min is continuous)
+        try:
+            duration = int(endDate) - int(startDate)
+            inferred = SUBDIR_CONTINUOUS if duration >= 900 else SUBDIR_EVENTS
+        except Exception:
+            inferred = SUBDIR_EVENTS
+        return os.path.join(coldDirPath, folder, inferred, f"{fileName}{extension}")
 
     coldFilePath = _resolve_cold_path()
     if not isPathInside(coldFilePath, coldDirPath):
@@ -2359,11 +2329,10 @@ def getColdFile(
 
 
 def reorganize_media_storage(hass: HomeAssistant, entry_id: str) -> None:
-    """Reorganize media files between root and subfolders based on download method."""
+    """Reorganize media files from root into events/continuous subfolders."""
     entry = hass.config_entries.async_get_entry(entry_id) if hass else None
     if not entry:
         return
-    download_method = entry.data.get(SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY)
     cold_dir = getColdDirPathForEntry(hass, entry_id)
     if not cold_dir or not os.path.exists(cold_dir):
         return
@@ -2371,99 +2340,69 @@ def reorganize_media_storage(hass: HomeAssistant, entry_id: str) -> None:
     videos_dir = os.path.join(cold_dir, "videos")
     thumbs_dir = os.path.join(cold_dir, "thumbs")
 
-    if download_method == SD_DOWNLOAD_METHOD_FAST:
-        # Move root files into events/ or continuous/
-        if os.path.exists(videos_dir):
-            events_vdir = os.path.join(videos_dir, SUBDIR_EVENTS)
-            cont_vdir = os.path.join(videos_dir, SUBDIR_CONTINUOUS)
-            events_tdir = os.path.join(thumbs_dir, SUBDIR_EVENTS)
-            cont_tdir = os.path.join(thumbs_dir, SUBDIR_CONTINUOUS)
+    # Move root files into events/ or continuous/
+    if os.path.exists(videos_dir):
+        events_vdir = os.path.join(videos_dir, SUBDIR_EVENTS)
+        cont_vdir = os.path.join(videos_dir, SUBDIR_CONTINUOUS)
+        events_tdir = os.path.join(thumbs_dir, SUBDIR_EVENTS)
+        cont_tdir = os.path.join(thumbs_dir, SUBDIR_CONTINUOUS)
 
-            entry_data = (
-                hass.data.get(DOMAIN, {}).get(entry_id, {})
-                if hass
-                else {}
-            )
-            is_downloading = entry_data.get("isDownloadingStream", False)
-            now = time.time()
+        entry_data = (
+            hass.data.get(DOMAIN, {}).get(entry_id, {})
+            if hass
+            else {}
+        )
+        is_downloading = entry_data.get("isDownloadingStream", False)
+        now = time.time()
 
-            try:
-                for fname in os.listdir(videos_dir):
-                    fpath = os.path.join(videos_dir, fname)
-                    if os.path.isfile(fpath) and fname.endswith(".mp4"):
-                        m = re.search(r"(\d{10})-(\d{10})", fname)
-                        is_continuous = False
-                        if m:
-                            duration = int(m.group(2)) - int(m.group(1))
-                            if duration >= 900:  # 15 minutes or longer is continuous
-                                is_continuous = True
+        try:
+            for fname in os.listdir(videos_dir):
+                fpath = os.path.join(videos_dir, fname)
+                if os.path.isfile(fpath) and fname.endswith(".mp4"):
+                    m = re.search(r"(\d{10})-(\d{10})", fname)
+                    is_continuous = False
+                    if m:
+                        duration = int(m.group(2)) - int(m.group(1))
+                        if duration >= 900:  # 15 minutes or longer is continuous
+                            is_continuous = True
 
-                        target_vdir = cont_vdir if is_continuous else events_vdir
-                        target_tdir = cont_tdir if is_continuous else events_tdir
-                        os.makedirs(target_vdir, exist_ok=True)
-                        dest_fpath = os.path.join(target_vdir, fname)
-                        if not os.path.exists(dest_fpath):
-                            shutil.move(fpath, dest_fpath)
-                            LOGGER.info("[Storage Migration] Moved %s -> %s", fname, target_vdir)
+                    target_vdir = cont_vdir if is_continuous else events_vdir
+                    target_tdir = cont_tdir if is_continuous else events_tdir
+                    os.makedirs(target_vdir, exist_ok=True)
+                    dest_fpath = os.path.join(target_vdir, fname)
+                    if not os.path.exists(dest_fpath):
+                        shutil.move(fpath, dest_fpath)
+                        LOGGER.info("[Storage Migration] Moved %s -> %s", fname, target_vdir)
 
-                        stem = os.path.splitext(fname)[0]
-                        thumb_name = f"{stem}.jpg"
-                        root_thumb = os.path.join(thumbs_dir, thumb_name)
-                        if os.path.exists(root_thumb):
-                            os.makedirs(target_tdir, exist_ok=True)
-                            dest_thumb = os.path.join(target_tdir, thumb_name)
-                            if not os.path.exists(dest_thumb):
-                                shutil.move(root_thumb, dest_thumb)
-                    elif (
-                        not is_downloading
-                        and os.path.isfile(fpath)
-                        and (
-                            fname.endswith(".mp4.ts")
-                            or fname.endswith(".tmp.ts")
-                            or fname.endswith(".tmp.mp4")
-                        )
-                    ):
-                        try:
-                            # Only delete orphaned temporary files older than 10 minutes (600s)
-                            if (now - os.path.getmtime(fpath)) > 600:
-                                os.remove(fpath)
-                                LOGGER.info(
-                                    "[Storage Cleanup] Removed stale temporary file: %s",
-                                    fname,
-                                )
-                        except OSError as err:
-                            LOGGER.debug("Could not remove stale file %s: %s", fpath, err)
-            except Exception as err:
-                LOGGER.error("Error during storage migration to Fast mode: %s", err)
-
-    elif download_method == SD_DOWNLOAD_METHOD_LEGACY:
-        # Revert files from events/ and continuous/ back to root
-        for sdir_name in (SUBDIR_EVENTS, SUBDIR_CONTINUOUS):
-            sub_vdir = os.path.join(videos_dir, sdir_name)
-            sub_tdir = os.path.join(thumbs_dir, sdir_name)
-            if os.path.exists(sub_vdir) and os.path.isdir(sub_vdir):
-                try:
-                    for fname in os.listdir(sub_vdir):
-                        src = os.path.join(sub_vdir, fname)
-                        dst = os.path.join(videos_dir, fname)
-                        if os.path.isfile(src) and not os.path.exists(dst):
-                            shutil.move(src, dst)
-                    if not os.listdir(sub_vdir):
-                        os.rmdir(sub_vdir)
-                except Exception as err:
-                    LOGGER.error("Error reverting videos from %s: %s", sub_vdir, err)
-
-            if os.path.exists(sub_tdir) and os.path.isdir(sub_tdir):
-                try:
-                    for fname in os.listdir(sub_tdir):
-                        src = os.path.join(sub_tdir, fname)
-                        dst = os.path.join(thumbs_dir, fname)
-                        if os.path.isfile(src) and not os.path.exists(dst):
-                            shutil.move(src, dst)
-                    if not os.listdir(sub_tdir):
-                        os.rmdir(sub_tdir)
-                except Exception as err:
-                    LOGGER.error("Error reverting thumbs from %s: %s", sub_tdir, err)
+                    stem = os.path.splitext(fname)[0]
+                    thumb_name = f"{stem}.jpg"
+                    root_thumb = os.path.join(thumbs_dir, thumb_name)
+                    if os.path.exists(root_thumb):
+                        os.makedirs(target_tdir, exist_ok=True)
+                        dest_thumb = os.path.join(target_tdir, thumb_name)
+                        if not os.path.exists(dest_thumb):
+                            shutil.move(root_thumb, dest_thumb)
+                elif (
+                    not is_downloading
+                    and os.path.isfile(fpath)
+                    and (
+                        fname.endswith(".mp4.ts")
+                        or fname.endswith(".tmp.ts")
+                        or fname.endswith(".tmp.mp4")
+                    )
+                ):
+                    try:
+                        # Only delete orphaned temporary files older than 10 minutes (600s)
+                        if (now - os.path.getmtime(fpath)) > 600:
+                            os.remove(fpath)
+                            LOGGER.info(
+                                "[Storage Cleanup] Removed stale temporary file: %s",
+                                fname,
+                            )
+                    except OSError as err:
+                        LOGGER.debug("Could not remove stale file %s: %s", fpath, err)
+        except Exception as err:
+            LOGGER.error("Error during storage migration to Fast mode: %s", err)
 
 
 async def async_reorganize_media_storage(hass: HomeAssistant, entry_id: str) -> None:
@@ -2621,22 +2560,15 @@ async def getRecording(
                 return coldFilePath
 
     if not video_exists:
-        selected_download_method = entry_data_dict.get(
-            SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
-        )
-
         now_ts = time.time()
-        if (
-            selected_download_method == SD_DOWNLOAD_METHOD_FAST
-            and entryData.get("fastDownloadDelayedUntil", 0) > now_ts
-        ):
+        if entryData.get("fastDownloadDelayedUntil", 0) > now_ts:
             return None
 
         device_name = entryData.get("camData", {}).get("basic_info", {}).get("device_alias")
         if not device_name:
             device_name = getattr(entry, "title", None) or entry_id
 
-        if selected_download_method == SD_DOWNLOAD_METHOD_FAST and entry_data_dict.get(SD_CHECK_GO2RTC_SESSION, True):
+        if entry_data_dict.get(SD_CHECK_GO2RTC_SESSION, True):
             camera_host = (
                 getattr(tapo, "host", None)
                 or entryData.get("camData", {}).get("basic_info", {}).get("ip")
@@ -2715,108 +2647,107 @@ async def getRecording(
         err_msg = ""
         transient_fast_conn_error = False
         try:
-            if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
-                entryData["sdDownloadMethod"] = "Fast (Download Protocol)"
+            entryData["sdDownloadMethod"] = "Fast (Download Protocol)"
 
-                thumb_path = getColdFile(
-                    hass,
-                    entry_id,
+            thumb_path = getColdFile(
+                hass,
+                entry_id,
+                startDate,
+                endDate,
+                "thumbs",
+                childID=childID,
+                subfolder=subfolder,
+            )
+            cloud_pwd = (
+                getattr(tapo, "cloudPassword", "")
+                or entry_data_dict.get(CLOUD_PASSWORD)
+                or entry_data_dict.get(CONF_PASSWORD)
+                or ""
+            )
+            ffmpeg_binary = "ffmpeg"
+            if DATA_FFMPEG in hass.data and hasattr(hass.data[DATA_FFMPEG], "binary"):
+                ffmpeg_binary = hass.data[DATA_FFMPEG].binary
+
+            try:
+                fast_downloader = FastDownloader(
+                    host=tapo.host,
+                    cloud_password=cloud_pwd,
+                    startDate=startDate,
+                    endDate=endDate,
+                    output_video_path=coldFilePath,
+                    output_thumb_path=thumb_path,
+                    port=getattr(tapo, "streamPort", 8800),
+                    ffmpeg_bin=ffmpeg_binary,
+                )
+                LOGGER.debug(
+                    "[Fast Download - %s] Starting fast download for %s (%s to %s)",
+                    device_name,
+                    coldFilePath,
                     startDate,
                     endDate,
-                    "thumbs",
-                    childID=childID,
-                    subfolder=subfolder,
                 )
-                cloud_pwd = (
-                    getattr(tapo, "cloudPassword", "")
-                    or entry_data_dict.get(CLOUD_PASSWORD)
-                    or entry_data_dict.get(CONF_PASSWORD)
-                    or ""
-                )
-                ffmpeg_binary = "ffmpeg"
-                if DATA_FFMPEG in hass.data and hasattr(hass.data[DATA_FFMPEG], "binary"):
-                    ffmpeg_binary = hass.data[DATA_FFMPEG].binary
+                cancel_event = entryData.get("mediaSyncCancelEvent")
+
+                def on_act():
+                    entryData["lastMediaSyncActivity"] = time.time()
+
+                def _run_fast_download():
+                    return fast_downloader.sync_download(
+                        progress_callback=status_callback,
+                        cancel_event=cancel_event,
+                        on_activity=on_act,
+                    )
 
                 try:
-                    fast_downloader = FastDownloader(
-                        host=tapo.host,
-                        cloud_password=cloud_pwd,
-                        startDate=startDate,
-                        endDate=endDate,
-                        output_video_path=coldFilePath,
-                        output_thumb_path=thumb_path,
-                        port=getattr(tapo, "streamPort", 8800),
-                        ffmpeg_bin=ffmpeg_binary,
+                    downloadedFile = await hass.async_add_executor_job(
+                        _run_fast_download
                     )
-                    LOGGER.debug(
-                        "[Fast Download - %s] Starting fast download for %s (%s to %s)",
-                        device_name,
-                        coldFilePath,
-                        startDate,
-                        endDate,
-                    )
-                    cancel_event = entryData.get("mediaSyncCancelEvent")
-
-                    def on_act():
-                        entryData["lastMediaSyncActivity"] = time.time()
-
-                    def _run_fast_download():
-                        return fast_downloader.sync_download(
-                            progress_callback=status_callback,
-                            cancel_event=cancel_event,
-                            on_activity=on_act,
+                except Exception as first_err:
+                    if is_transient_connection_error(first_err) and not (
+                        cancel_event and cancel_event.is_set()
+                    ):
+                        LOGGER.debug(
+                            "[Fast Download - %s] Transient port 8800 connection error (%s); retrying once in %ds",
+                            device_name,
+                            _truncate_download_warning(first_err),
+                            FAST_PORT_RETRY_DELAY_SECONDS,
                         )
-
-                    try:
+                        await asyncio.sleep(FAST_PORT_RETRY_DELAY_SECONDS)
+                        if cancel_event and cancel_event.is_set():
+                            raise first_err
                         downloadedFile = await hass.async_add_executor_job(
                             _run_fast_download
                         )
-                    except Exception as first_err:
-                        if is_transient_connection_error(first_err) and not (
-                            cancel_event and cancel_event.is_set()
-                        ):
-                            LOGGER.debug(
-                                "[Fast Download - %s] Transient port 8800 connection error (%s); retrying once in %ds",
-                                device_name,
-                                _truncate_download_warning(first_err),
-                                FAST_PORT_RETRY_DELAY_SECONDS,
-                            )
-                            await asyncio.sleep(FAST_PORT_RETRY_DELAY_SECONDS)
-                            if cancel_event and cancel_event.is_set():
-                                raise first_err
-                            downloadedFile = await hass.async_add_executor_job(
-                                _run_fast_download
-                            )
-                        else:
-                            raise
-                    entryData["lastDownloadWarning"] = None
-                except Exception as err:
-                    err_msg = str(err)
-                    is_auth_error = (
-                        isinstance(err, FastMediaError) and getattr(err, "code", None) == 401
-                    ) or (
-                        "media authentication rejected" in err_msg.lower()
-                        or "check tapo cloud password" in err_msg.lower()
-                    )
-                    transient_fast_conn_error = (
-                        not is_auth_error
-                    ) and is_transient_connection_error(err)
-                    if is_auth_error:
-                        warn_desc = (
-                            "Authentication failure on media port 8800 (HTTP 401). "
-                            "Check 'Cloud Password' in camera settings."
-                        )
                     else:
-                        warn_desc = (
-                            "Error during fast download on port 8800: "
-                            + _truncate_download_warning(err_msg)
-                        )
-                    LOGGER.warning(
-                        "[Fast Download - %s] %s",
-                        device_name,
-                        warn_desc,
+                        raise
+                entryData["lastDownloadWarning"] = None
+            except Exception as err:
+                err_msg = str(err)
+                is_auth_error = (
+                    isinstance(err, FastMediaError) and getattr(err, "code", None) == 401
+                ) or (
+                    "media authentication rejected" in err_msg.lower()
+                    or "check tapo cloud password" in err_msg.lower()
+                )
+                transient_fast_conn_error = (
+                    not is_auth_error
+                ) and is_transient_connection_error(err)
+                if is_auth_error:
+                    warn_desc = (
+                        "Authentication failure on media port 8800 (HTTP 401). "
+                        "Check 'Cloud Password' in camera settings."
                     )
-                    entryData["lastDownloadWarning"] = warn_desc
+                else:
+                    warn_desc = (
+                        "Error during fast download on port 8800: "
+                        + _truncate_download_warning(err_msg)
+                    )
+                LOGGER.warning(
+                    "[Fast Download - %s] %s",
+                    device_name,
+                    warn_desc,
+                )
+                entryData["lastDownloadWarning"] = warn_desc
 
             if downloadedFile is None:
                 duration_seconds = endDate - startDate
@@ -2826,10 +2757,7 @@ async def getRecording(
                     or duration_seconds > 120
                 )
 
-                if (
-                    selected_download_method == SD_DOWNLOAD_METHOD_FAST
-                    and transient_fast_conn_error
-                ):
+                if transient_fast_conn_error:
                     LOGGER.info(
                         "[Fast Download - %s] Transient port 8800 connection error persisted after retry (%ds clip); "
                         "skipping same-port legacy fallback until next cycle.",
@@ -2839,7 +2767,7 @@ async def getRecording(
                     entryData["sdDownloadMethod"] = "Fast (Retry Pending)"
                     return None
 
-                if selected_download_method == SD_DOWNLOAD_METHOD_FAST and is_continuous:
+                if is_continuous:
                     if err_msg and any(
                         term in err_msg.lower()
                         for term in (
@@ -2881,23 +2809,15 @@ async def getRecording(
                     entryData["sdDownloadMethod"] = "Fast (Retry Pending)"
                     return None
 
-                if selected_download_method == SD_DOWNLOAD_METHOD_FAST:
-                    LOGGER.warning(
-                        "[Fast Download - %s] Fast download failed for short clip (%ds). Falling back to legacy download method.",
-                        device_name,
-                        duration_seconds,
-                    )
-                    entryData["sdDownloadMethod"] = "Legacy (Fallback)"
-                else:
-                    if entryData.get("sdDownloadMethod") != "Legacy (Fallback)":
-                        entryData["sdDownloadMethod"] = "Legacy (Playback)"
+                LOGGER.warning(
+                    "[Fast Download - %s] Fast download failed for short clip (%ds). Falling back to legacy download method.",
+                    device_name,
+                    duration_seconds,
+                )
+                entryData["sdDownloadMethod"] = "Legacy (Fallback)"
 
                 timeCorrection = await hass.async_add_executor_job(tapo.getTimeCorrection)
-                target_video_dir = (
-                    os.path.dirname(coldFilePath) + "/"
-                    if selected_download_method == SD_DOWNLOAD_METHOD_FAST
-                    else coldDirPath + "/videos/"
-                )
+                target_video_dir = os.path.dirname(coldFilePath) + "/"
                 os.makedirs(target_video_dir, exist_ok=True)
                 downloader = Downloader(
                     tapo,
@@ -2923,10 +2843,7 @@ async def getRecording(
                     entryData["lastDownloadWarning"] = clean_legacy_err
                     downloadedFile = None
                 finally:
-                    if (
-                        selected_download_method == SD_DOWNLOAD_METHOD_FAST
-                        and os.path.exists(temp_ts)
-                    ):
+                    if os.path.exists(temp_ts):
                         try:
                             os.remove(temp_ts)
                             LOGGER.warning(
@@ -4336,7 +4253,7 @@ async def update_listener(hass, entry):
         hass.data[DOMAIN][entry.entry_id]["motionSensorCreated"] = False
     if motionSensor or enableTimeSync:
         onvifDevice = await initOnvifEvents(hass, host, username, password)
-        if onvifDevice:
+        if onvifDevice and DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
             hass.data[DOMAIN][entry.entry_id]["eventsDevice"] = onvifDevice["device"]
             hass.data[DOMAIN][entry.entry_id]["onvifManagement"] = onvifDevice[
                 "device_mgmt"
@@ -4344,12 +4261,11 @@ async def update_listener(hass, entry):
             if motionSensor:
                 await setupOnvif(hass, entry)
 
-    if entry.entry_id in hass.data.get(DOMAIN, {}):
+    if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
         hass.data[DOMAIN][entry.entry_id]["mediaSyncColdDir"] = False
 
-    # Ensure media sync settings (hours/enable) propagate immediately.
-    if DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
-        now_ts = datetime.datetime.utcnow().timestamp()
+        # Ensure media sync settings (hours/enable) propagate immediately.
+        now_ts = time.time()
         entry_data = hass.data[DOMAIN][entry.entry_id]
         devices = [entry_data]
         if entry_data.get("isParent"):
@@ -4443,16 +4359,18 @@ async def syncTime(hass, entry_id):
 
 async def setupOnvif(hass, entry):
     LOGGER.debug("setupOnvif - entry")
-    if hass.data[DOMAIN][entry.entry_id]["eventsDevice"]:
+    entry_data = hass.data.get(DOMAIN, {}).get(entry.entry_id)
+    if entry_data and entry_data.get("eventsDevice"):
         LOGGER.debug("Setting up onvif...")
-        hass.data[DOMAIN][entry.entry_id]["events"] = EventManager(
+        entry_name = entry_data.get("name") or getattr(entry, "title", None) or entry.entry_id
+        entry_data["events"] = EventManager(
             hass,
-            hass.data[DOMAIN][entry.entry_id]["eventsDevice"],
+            entry_data["eventsDevice"],
             entry,
-            hass.data[DOMAIN][entry.entry_id]["name"],
+            entry_name,
         )
 
-        hass.data[DOMAIN][entry.entry_id]["eventsSetup"] = await setupEvents(
+        entry_data["eventsSetup"] = await setupEvents(
             hass, entry
         )
 

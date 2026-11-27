@@ -74,9 +74,6 @@ from .const import (
     SOUND_DETECTION_RESET,
     HAS_STREAM_6,
     HAS_STREAM_7,
-    SD_DOWNLOAD_METHOD,
-    SD_DOWNLOAD_METHOD_LEGACY,
-    SD_DOWNLOAD_METHOD_FAST,
     SD_SYNC_RECORDING_TYPES,
     SD_SYNC_RECORDING_TYPES_BOTH,
     SD_SYNC_RECORDING_TYPES_EVENTS,
@@ -1068,12 +1065,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                 entry.data.get("media_sync_source", RECORDINGS_SOURCE_SD),
             )
             if sync_source == RECORDINGS_SOURCE_SD:
-                download_method = entry.data.get(
-                    SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
-                )
                 fast_cleanup_time = entry.data.get(FAST_CLEANUP_TIME, "04:00")
 
-                if download_method == SD_DOWNLOAD_METHOD_FAST and fast_cleanup_time:
+                if fast_cleanup_time:
                     try:
                         target_hour, target_minute = map(
                             int, fast_cleanup_time.split(":")
@@ -1497,13 +1491,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                     mediaSyncTime = False
             LOGGER.debug("mediaSync - 3")
             now_ts = time.time()
-            entry_download_method = entry.data.get(
-                SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
-            )
-            if (
-                entry_download_method == SD_DOWNLOAD_METHOD_FAST
-                and device.get("fastDownloadDelayedUntil", 0) > now_ts
-            ):
+            if device.get("fastDownloadDelayedUntil", 0) > now_ts:
                 remaining_m = max(1, int((device["fastDownloadDelayedUntil"] - now_ts) / 60))
                 LOGGER.debug(
                     "[Fast Download - %s] Synchronization paused (%s, %d min remaining)",
@@ -1587,188 +1575,108 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
                             ):
                                 matched_dates.append(searchResult[key]["date"])
 
-                    entry_download_method = entry.data.get(
-                        SD_DOWNLOAD_METHOD, SD_DOWNLOAD_METHOD_LEGACY
+                    sd_sync_type = entry.data.get(
+                        SD_SYNC_RECORDING_TYPES,
+                        SD_SYNC_RECORDING_TYPES_BOTH,
                     )
-                    if entry_download_method == SD_DOWNLOAD_METHOD_FAST:
-                        sd_sync_type = entry.data.get(
-                            SD_SYNC_RECORDING_TYPES,
-                            SD_SYNC_RECORDING_TYPES_BOTH,
+                    events_queue = []
+                    continuous_queue = []
+                    for d_str in matched_dates:
+                        if device.get("fastDownloadDelayedUntil", 0) > time.time():
+                            break
+                        use_past_cache = _is_settled_past_day(d_str, ts)
+                        recordingsForDay = await _call_with_transient_retry(
+                            lambda d=d_str, cache_ok=use_past_cache: getRecordings(
+                                hass,
+                                device,
+                                tapoController,
+                                d,
+                                use_past_day_cache=cache_ok,
+                            ),
+                            sync_log_prefix,
                         )
-                        events_queue = []
-                        continuous_queue = []
-                        for d_str in matched_dates:
-                            if device.get("fastDownloadDelayedUntil", 0) > time.time():
-                                break
-                            use_past_cache = _is_settled_past_day(d_str, ts)
-                            recordingsForDay = await _call_with_transient_retry(
-                                lambda d=d_str, cache_ok=use_past_cache: getRecordings(
+                        day_events = []
+                        day_continuous = []
+                        for recording in recordingsForDay:
+                            for recordingKey in recording:
+                                rec_data = recording[recordingKey]
+                                if rec_data["endTime"] > min_end_cutoff:
+                                    continue
+                                if rec_data["endTime"] > int(ts) - int(mediaSyncTime):
+                                    sf = get_recording_subfolder(rec_data)
+                                    if sf == SUBDIR_CONTINUOUS:
+                                        day_continuous.append((recording, recordingKey, sf))
+                                    else:
+                                        day_events.append((recording, recordingKey, sf))
+                        tot_ev = len(day_events)
+                        for idx, (rec, k, sf) in enumerate(day_events, 1):
+                            events_queue.append((rec, k, sf, idx, tot_ev, "event", d_str))
+                        tot_cont = len(day_continuous)
+                        for idx, (rec, k, sf) in enumerate(day_continuous, 1):
+                            continuous_queue.append((rec, k, sf, idx, tot_cont, "recording", d_str))
+
+                    download_queue = []
+                    if sd_sync_type in (
+                        SD_SYNC_RECORDING_TYPES_EVENTS,
+                        SD_SYNC_RECORDING_TYPES_BOTH,
+                    ):
+                        download_queue.extend(events_queue)
+                    if sd_sync_type in (
+                        SD_SYNC_RECORDING_TYPES_CONTINUOUS,
+                        SD_SYNC_RECORDING_TYPES_BOTH,
+                    ):
+                        download_queue.extend(continuous_queue)
+
+                    for recording, recordingKey, subf, rec_count, tot_count, item_type, d_str in download_queue:
+                        if (
+                            device.get("fastDownloadDelayedUntil", 0) > time.time()
+                        ):
+                            break
+                        try:
+                            enableMediaSync = device[
+                                ENABLE_MEDIA_SYNC
+                            ]
+                            if enableMediaSync:
+                                # Recordings already in cold storage return without
+                                # awaiting anything; yield so a day with many of them
+                                # does not hold the event loop.
+                                await asyncio.sleep(0)
+                                LOGGER.debug("getRecording -1")
+                                await getRecording(
                                     hass,
-                                    device,
                                     tapoController,
-                                    d,
-                                    use_past_day_cache=cache_ok,
-                                ),
-                                sync_log_prefix,
-                            )
-                            day_events = []
-                            day_continuous = []
-                            for recording in recordingsForDay:
-                                for recordingKey in recording:
-                                    rec_data = recording[recordingKey]
-                                    if rec_data["endTime"] > min_end_cutoff:
-                                        continue
-                                    if rec_data["endTime"] > int(ts) - int(mediaSyncTime):
-                                        sf = get_recording_subfolder(rec_data)
-                                        if sf == SUBDIR_CONTINUOUS:
-                                            day_continuous.append((recording, recordingKey, sf))
-                                        else:
-                                            day_events.append((recording, recordingKey, sf))
-                            tot_ev = len(day_events)
-                            for idx, (rec, k, sf) in enumerate(day_events, 1):
-                                events_queue.append((rec, k, sf, idx, tot_ev, "event", d_str))
-                            tot_cont = len(day_continuous)
-                            for idx, (rec, k, sf) in enumerate(day_continuous, 1):
-                                continuous_queue.append((rec, k, sf, idx, tot_cont, "recording", d_str))
-
-                        download_queue = []
-                        if sd_sync_type in (
-                            SD_SYNC_RECORDING_TYPES_EVENTS,
-                            SD_SYNC_RECORDING_TYPES_BOTH,
-                        ):
-                            download_queue.extend(events_queue)
-                        if sd_sync_type in (
-                            SD_SYNC_RECORDING_TYPES_CONTINUOUS,
-                            SD_SYNC_RECORDING_TYPES_BOTH,
-                        ):
-                            download_queue.extend(continuous_queue)
-
-                        for recording, recordingKey, subf, rec_count, tot_count, item_type, d_str in download_queue:
+                                    entry.entry_id,
+                                    device,
+                                    d_str,
+                                    recording[recordingKey][
+                                        "startTime"
+                                    ],
+                                    recording[recordingKey][
+                                        "endTime"
+                                    ],
+                                    rec_count,
+                                    tot_count,
+                                    subfolder=subf,
+                                    item_type=item_type,
+                                    coldFiles=coldFiles,
+                                )
+                                LOGGER.debug("getRecording -2")
+                                device["lastMediaSyncActivity"] = time.time()
+                            else:
+                                LOGGER.debug(
+                                    f"Media sync disabled (inside getRecording): {enableMediaSync}"
+                                )
+                        except Unresolvable as err:
                             if (
-                                device.get("fastDownloadDelayedUntil", 0) > time.time()
+                                str(err)
+                                == "Recording is currently in progress."
                             ):
-                                break
-                            try:
-                                enableMediaSync = device[
-                                    ENABLE_MEDIA_SYNC
-                                ]
-                                if enableMediaSync:
-                                    # Recordings already in cold storage return without
-                                    # awaiting anything; yield so a day with many of them
-                                    # does not hold the event loop.
-                                    await asyncio.sleep(0)
-                                    LOGGER.debug("getRecording -1")
-                                    await getRecording(
-                                        hass,
-                                        tapoController,
-                                        entry.entry_id,
-                                        device,
-                                        d_str,
-                                        recording[recordingKey][
-                                            "startTime"
-                                        ],
-                                        recording[recordingKey][
-                                            "endTime"
-                                        ],
-                                        rec_count,
-                                        tot_count,
-                                        subfolder=subf,
-                                        item_type=item_type,
-                                        coldFiles=coldFiles,
-                                    )
-                                    LOGGER.debug("getRecording -2")
-                                    device["lastMediaSyncActivity"] = time.time()
-                                else:
-                                    LOGGER.debug(
-                                        f"Media sync disabled (inside getRecording): {enableMediaSync}"
-                                    )
-                            except Unresolvable as err:
-                                if (
-                                    str(err)
-                                    == "Recording is currently in progress."
-                                ):
-                                    LOGGER.info(err)
-                                else:
-                                    LOGGER.warning(err)
-                            except Exception as err:
-                                device["runningMediaSync"] = False
-                                LOGGER.error("[Media Sync - %s] Error downloading recording: %s", device.get("name"), err)
-                    else:
-                        for d_str in matched_dates:
-                            if device.get("fastDownloadDelayedUntil", 0) > time.time():
-                                break
-                            use_past_cache = _is_settled_past_day(d_str, ts)
-                            recordingsForDay = await _call_with_transient_retry(
-                                lambda d=d_str, cache_ok=use_past_cache: getRecordings(
-                                    hass,
-                                    device,
-                                    tapoController,
-                                    d,
-                                    use_past_day_cache=cache_ok,
-                                ),
-                                sync_log_prefix,
-                            )
-                            totalRecordingsToDownload = 0
-                            for recording in recordingsForDay:
-                                for recordingKey in recording:
-                                    rec_end = recording[recordingKey]["endTime"]
-                                    if rec_end > min_end_cutoff:
-                                        continue
-                                    if rec_end > int(ts) - (int(mediaSyncTime)):
-                                        totalRecordingsToDownload += 1
-                            recordingCount = 0
-                            for recording in recordingsForDay:
-                                if (
-                                    device.get("fastDownloadDelayedUntil", 0) > time.time()
-                                ):
-                                    break
-                                for recordingKey in recording:
-                                    rec_end = recording[recordingKey]["endTime"]
-                                    if rec_end > min_end_cutoff:
-                                        continue
-                                    if rec_end > (int(ts) - (int(mediaSyncTime))):
-                                        recordingCount += 1
-                                        try:
-                                            enableMediaSync = device[
-                                                ENABLE_MEDIA_SYNC
-                                            ]
-                                            if enableMediaSync:
-                                                await asyncio.sleep(0)
-                                                LOGGER.debug("getRecording -1")
-                                                await getRecording(
-                                                    hass,
-                                                    tapoController,
-                                                    entry.entry_id,
-                                                    device,
-                                                    d_str,
-                                                    recording[recordingKey][
-                                                        "startTime"
-                                                    ],
-                                                    recording[recordingKey][
-                                                        "endTime"
-                                                    ],
-                                                    recordingCount,
-                                                    totalRecordingsToDownload,
-                                                    item_type="recording",
-                                                    coldFiles=coldFiles,
-                                                )
-                                                LOGGER.debug("getRecording -2")
-                                                device["lastMediaSyncActivity"] = time.time()
-                                            else:
-                                                LOGGER.debug(
-                                                    f"Media sync disabled (inside getRecording): {enableMediaSync}"
-                                                )
-                                        except Unresolvable as err:
-                                            if (
-                                                str(err)
-                                                == "Recording is currently in progress."
-                                            ):
-                                                LOGGER.info(err)
-                                            else:
-                                                LOGGER.warning(err)
-                                        except Exception as err:
-                                            device["runningMediaSync"] = False
-                                            LOGGER.error("[Media Sync - %s] Error downloading recording: %s", device.get("name"), err)
+                                LOGGER.info(err)
+                            else:
+                                LOGGER.warning(err)
+                        except Exception as err:
+                            device["runningMediaSync"] = False
+                            LOGGER.error("[Media Sync - %s] Error downloading recording: %s", device.get("name"), err)
                     device["lastMediaSyncSuccess"] = time.time()
                     device["mediaSyncConsecutiveConnErrors"] = 0
                 except Exception as err:

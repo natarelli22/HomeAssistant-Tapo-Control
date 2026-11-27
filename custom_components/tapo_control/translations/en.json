@@ -1,11 +1,11 @@
 {
   "title": "Tapo: Cameras Control",
   "selector": {
-    "live_view_mode": {
+    "sd_sync_recording_types": {
       "options": {
-        "home_assistant": "Home Assistant (automatic)",
-        "native_webrtc": "Native WebRTC (experimental)",
-        "mjpeg": "MJPEG (video only)"
+        "both": "Both (Detection Events first, then Continuous)",
+        "events": "Detection Events only (Motion/Person)",
+        "continuous": "Continuous Recording only (24/7)"
       }
     }
   },
@@ -138,13 +138,11 @@
           "media_sync_hours": "Number of hours to keep synchronized",
           "media_sync_cold_storage_path": "Cold storage path",
           "enable_event_preroll_sync": "Enable Event Pre-roll Synchronization",
-          "sd_download_method": "Recordings download method",
           "media_thumbnail_cache": "Cache thumbnails",
           "media_thumbnail_preload": "Preload thumbnails"
         },
         "data_description": {
           "enable_event_preroll_sync": "Automatically detect the exact visual timestamp on frame 0 of SD Card event recordings to eliminate pre-roll offset.",
-          "sd_download_method": "Fast downloads recordings quickly via camera port 8800. Legacy downloads via RTSP playback.",
           "media_thumbnail_cache": "Keep thumbnails for recordings whose videos have not been downloaded. When off, these thumbnails expire after about 5 minutes.",
           "media_thumbnail_preload": "Fetch thumbnails during startup scans only when caching is also enabled. With caching off, fetch only while browsing. When preloading is off, fetch only while browsing if caching is enabled. Turn both options off to show thumbnails only for downloaded videos."
         },
@@ -307,21 +305,6 @@
       },
       "speaker": {
         "name": "Speaker"
-      }
-    }
-  },
-  "selector": {
-    "sd_download_method": {
-      "options": {
-        "Fast (Download Protocol)": "Fast Download (Port 8800 - High Speed)",
-        "Legacy (Playback)": "Legacy (RTSP Stream - Normal Speed)"
-      }
-    },
-    "sd_sync_recording_types": {
-      "options": {
-        "both": "Both (Detection Events first, then Continuous)",
-        "events": "Detection Events only (Motion/Person)",
-        "continuous": "Continuous Recording only (24/7)"
       }
     }
   }
