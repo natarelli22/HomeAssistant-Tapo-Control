@@ -1,7 +1,6 @@
 import datetime
 import hashlib
 import asyncio
-import pathlib
 import time
 import threading
 from aiohttp import ClientError
@@ -78,7 +77,6 @@ from .const import (
     SD_SYNC_RECORDING_TYPES_BOTH,
     SD_SYNC_RECORDING_TYPES_EVENTS,
     SD_SYNC_RECORDING_TYPES_CONTINUOUS,
-    SUBDIR_EVENTS,
     SUBDIR_CONTINUOUS,
     TIME_SYNC_DST,
     TIME_SYNC_DST_DEFAULT,
@@ -118,7 +116,6 @@ from .utils import (
     initOnvifEvents,
     syncTime,
     getLatestFirmwareVersion,
-    findMedia,
     getRecordings,
     is_transient_connection_error,
     scheduleAll,

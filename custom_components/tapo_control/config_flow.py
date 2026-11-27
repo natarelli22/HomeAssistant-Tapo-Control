@@ -28,8 +28,6 @@ from .utils import (
     areCameraPortsOpened,
     isOpen,
     isKLAP,
-    getConfiguredColdDirPath,
-    getDataPath,
 )
 from .const import (
     CLOUD_USERNAME,

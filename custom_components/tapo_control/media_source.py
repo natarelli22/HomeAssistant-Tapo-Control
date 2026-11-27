@@ -7,7 +7,6 @@ Integrates seamlessly with Home Assistant Media Browser and Advanced Camera Card
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-import json
 import os
 from pathlib import Path
 import re
@@ -62,13 +61,10 @@ from .const import (
     RECORDINGS_SOURCE,
     RECORDINGS_SOURCE_SD,
     RECORDINGS_SOURCE_TAPO_CARE,
-    MEDIA_THUMBNAIL_CACHE,
-    MEDIA_THUMBNAIL_PRELOAD,
     MEDIA_VIEW_DAYS_ORDER,
     MEDIA_VIEW_RECORDINGS_ORDER,
     SD_SYNC_RECORDING_TYPES,
     SD_SYNC_RECORDING_TYPES_BOTH,
-    SD_SYNC_RECORDING_TYPES_EVENTS,
     SD_SYNC_RECORDING_TYPES_CONTINUOUS,
     SUBDIR_EVENTS,
     SUBDIR_CONTINUOUS,
@@ -80,13 +76,8 @@ from .utils import (
     getDataPath,
     format_date_ha,
     getColdFile,
-    getFileName,
     getRecording,
     get_recording_subfolder,
-    getRecordings,
-    getWebFile,
-    preloadRecordingThumbnails,
-    cleanupThumbnailCache,
 )
 
 

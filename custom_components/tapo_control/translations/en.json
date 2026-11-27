@@ -7,6 +7,13 @@
         "events": "Detection Events only (Motion/Person)",
         "continuous": "Continuous Recording only (24/7)"
       }
+    },
+    "live_view_mode": {
+      "options": {
+        "home_assistant": "Home Assistant (automatic)",
+        "native_webrtc": "Native WebRTC (experimental)",
+        "mjpeg": "MJPEG (video only)"
+      }
     }
   },
   "config": {

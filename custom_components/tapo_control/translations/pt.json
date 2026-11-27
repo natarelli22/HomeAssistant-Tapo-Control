@@ -7,6 +7,13 @@
         "events": "Apenas Eventos de Deteção (Movimento/Pessoas)",
         "continuous": "Apenas Gravação Contínua (24/7)"
       }
+    },
+    "live_view_mode": {
+      "options": {
+        "home_assistant": "Home Assistant (automático)",
+        "native_webrtc": "WebRTC nativo (experimental)",
+        "mjpeg": "MJPEG (apenas vídeo)"
+      }
     }
   },
   "config": {
@@ -79,11 +86,7 @@
           "password": "Palavra-passe",
           "enable_motion_sensor": "Ativar sensor de movimento",
           "show_on_map": "Mostrar câmara no mapa",
-          "enable_sound_detection": "Ativar deteção de limite de som (requer reinício)",
           "cloud_password": "Palavra-passe de cloud (opcional)",
-          "sound_detection_peak": "[Deteção de som] Pico em dB. 0 é muito alto e -100 é baixo.",
-          "sound_detection_duration": "[Deteção de som] Quanto tempo o ruído necessita de estar acima do pico para ativar o estado.",
-          "sound_detection_reset": "[Deteção de som] Tempo para repor o estado depois de não haver ruído acima do pico.",
           "direct_stream_arguments": "Parâmetros FFmpeg dos fluxos diretos",
           "live_view_mode": "Modo de visualização em direto"
         },

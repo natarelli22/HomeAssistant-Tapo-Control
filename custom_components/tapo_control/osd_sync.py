@@ -1,7 +1,5 @@
 """OSD Visual Timestamp Pre-roll Synchronization for Tapo Control."""
 import os
-import re
-import time
 import zoneinfo
 import tempfile
 import subprocess
